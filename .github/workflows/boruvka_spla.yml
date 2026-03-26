@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - main
+      - feat/boruvka_spla
     paths:
       - 'boruvka/boruvka_spla/**'
       - '.github/workflows/boruvka_spla.yml'
