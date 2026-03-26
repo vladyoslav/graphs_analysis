@@ -1,59 +1,28 @@
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.15)
+project(boruvka_spla LANGUAGES CXX)
 
-include(cmake/prelude.cmake)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-project(
-    boruvka_spla
-    VERSION 0.1.0
-    DESCRIPTION "Short description"
-    HOMEPAGE_URL "https://example.com/"
-    LANGUAGES CXX
-)
+set(SPLA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(SPLA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+# CPU-only by default (CI-friendly without OpenCL). For GPU: set ON or pass -DSPLA_BUILD_OPENCL=ON
+set(SPLA_BUILD_OPENCL OFF CACHE BOOL "" FORCE)
 
-include(cmake/project-is-top-level.cmake)
-include(cmake/variables.cmake)
+add_subdirectory(deps/spla)
 
-# ---- Declare library ----
+add_library(boruvka_spla_lib OBJECT src/lib.cpp)
+target_include_directories(boruvka_spla_lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(boruvka_spla_lib PUBLIC spla)
 
-add_library(
-    boruvka_spla_lib OBJECT
-    src/lib.cpp
-)
+add_executable(boruvka_spla src/main.cpp)
+target_link_libraries(boruvka_spla PRIVATE boruvka_spla_lib)
+set_target_properties(boruvka_spla PROPERTIES OUTPUT_NAME boruvka_spla)
 
-target_include_directories(
-    boruvka_spla_lib ${warning_guard}
-    PUBLIC
-    "\$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src>"
-)
-
-target_compile_features(boruvka_spla_lib PUBLIC cxx_std_20)
-
-# ---- Declare executable ----
-
-add_executable(boruvka_spla_exe src/main.cpp)
-add_executable(boruvka_spla::exe ALIAS boruvka_spla_exe)
-
-set_property(TARGET boruvka_spla_exe PROPERTY OUTPUT_NAME boruvka_spla)
-
-target_compile_features(boruvka_spla_exe PRIVATE cxx_std_20)
-
-target_link_libraries(boruvka_spla_exe PRIVATE boruvka_spla_lib)
-
-# ---- Install rules ----
-
-if(NOT CMAKE_SKIP_INSTALL_RULES)
-  include(cmake/install-rules.cmake)
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(boruvka_spla_test test/test_lib.cpp)
+  target_link_libraries(boruvka_spla_test PRIVATE boruvka_spla_lib)
+  add_test(NAME boruvka_spla_test COMMAND boruvka_spla_test)
 endif()
-
-# ---- Developer mode ----
-
-if(NOT boruvka_spla_DEVELOPER_MODE)
-  return()
-elseif(NOT PROJECT_IS_TOP_LEVEL)
-  message(
-      AUTHOR_WARNING
-      "Developer mode is intended for developers of boruvka_spla"
-  )
-endif()
-
-include(cmake/dev-mode.cmake)

@@ -1,19 +1,36 @@
 # boruvka_spla
 
-This is the boruvka_spla project.
+Course project: Borůvka MST using [SPLA](https://github.com/SparseLinearAlgebra/spla). SPLA is vendored under `deps/spla` (typically as a git submodule).
 
-# Building and installing
+## Build
 
-See the [BUILDING](BUILDING.md) document.
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+```
 
-# Contributing
+Run:
 
-See the [CONTRIBUTING](CONTRIBUTING.md) document.
+```bash
+./build/boruvka_spla
+```
 
-# Licensing
+## Tests
 
-<!--
-Please go to https://choosealicense.com/licenses/ and choose a license that
-fits your needs. The recommended license for a project of this type is the
-GNU AGPLv3.
--->
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+## Formatting
+
+```bash
+clang-format -i src/*.cpp src/*.hpp test/*.cpp
+```
+
+Check without writing: `clang-format --dry-run --Werror` on the same files.
+
+## OpenCL
+
+By default SPLA is built without OpenCL (`SPLA_BUILD_OPENCL=OFF` in the root `CMakeLists.txt`). For GPU acceleration, install your platform’s OpenCL dependencies and reconfigure with `-DSPLA_BUILD_OPENCL=ON`.
