@@ -1,6 +1,5 @@
 #include "lib.hpp"
 
 library::library()
-    : name {"boruvka_spla"}
-{
+    : name{"boruvka_spla"} {
 }

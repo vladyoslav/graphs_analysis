@@ -1,10 +1,10 @@
 set(
     FORMAT_PATTERNS
-    source/*.cpp source/*.hpp
+    src/*.cpp src/*.hpp
     include/*.hpp
     test/*.cpp test/*.hpp
     CACHE STRING
-    "; separated patterns relative to the project source dir to format"
+    "; separated patterns relative to the project src dir to format"
 )
 
 set(FORMAT_COMMAND clang-format CACHE STRING "Formatter to use")
