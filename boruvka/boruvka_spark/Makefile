@@ -9,7 +9,10 @@ ifdef CSV
 ARGS += --csv=$(CSV)
 endif
 
-.PHONY: run test clean
+.PHONY: run test clean build
+
+build:
+	sbt compile
 
 run:
 ifndef GRAPH
@@ -22,4 +25,3 @@ test:
 
 clean:
 	sbt clean
-	
