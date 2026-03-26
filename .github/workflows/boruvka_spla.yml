@@ -1,0 +1,81 @@
+name: Boruvka SPLA Continuous Integration
+
+defaults:
+  run:
+    working-directory: boruvka/boruvka_spla
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'boruvka/boruvka_spla/**'
+      - '.github/workflows/boruvka_spla.yml'
+
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'boruvka/boruvka_spla/**'
+      - '.github/workflows/boruvka_spla.yml'
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with: { python-version: "3.12" }
+
+    - name: Install codespell
+      run: pip3 install codespell
+
+    - name: Lint
+      run: cmake -D FORMAT_COMMAND=clang-format-18 -P cmake/lint.cmake
+
+    - name: Spell check
+      if: always()
+      run: cmake -P cmake/spell.cmake
+
+  test:
+    needs: [lint]
+
+    strategy:
+      matrix:
+        os: [macos-14, ubuntu-24.04, windows-2022]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install static analyzers
+      if: matrix.os == 'ubuntu-24.04'
+      run: >-
+        sudo apt-get install clang-tidy-18 cppcheck -y -q
+
+        sudo update-alternatives --install
+        /usr/bin/clang-tidy clang-tidy
+        /usr/bin/clang-tidy-18 180
+
+    - name: Setup MultiToolTask
+      if: matrix.os == 'windows-2022'
+      run: |
+        Add-Content "$env:GITHUB_ENV" 'UseMultiToolTask=true'
+        Add-Content "$env:GITHUB_ENV" 'EnforceProcessCountAcrossBuilds=true'
+
+    - name: Configure
+      shell: pwsh
+      run: cmake "--preset=ci-$("${{ matrix.os }}".split("-")[0])"
+
+    - name: Build
+      run: cmake --build build --config Release -j 2
+
+    - name: Install
+      run: cmake --install build --config Release --prefix prefix
+
+    - name: Test
+      working-directory: boruvka/boruvka_spla/build
+      run: ctest --output-on-failure --no-tests=error -C Release -j 2
