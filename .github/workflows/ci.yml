@@ -13,13 +13,18 @@ jobs:
       run:
         working-directory: boruvka/boruvka_spark
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           java-version: '11'
           distribution: 'temurin'
           cache: 'sbt'
-      - name: Setup Scala
-        uses: coursier/setup-action@v1
+          
+      - name: Setup sbt
+        uses: sbt/setup-sbt@v1
+        
       - name: Run tests
-        run: make test
+        run: sbt test
