@@ -2,6 +2,7 @@
 .idea/
 .vs/
 .vscode/
+.cursor/
 build/
 cmake-build-*/
 prefix/
