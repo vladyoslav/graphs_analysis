@@ -1,0 +1,12 @@
+# IDE and editor files
+.metals/
+.scala-build/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Experiment results (generated)
+results/
