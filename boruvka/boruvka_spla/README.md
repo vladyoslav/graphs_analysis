@@ -40,7 +40,7 @@ Binary: `build/boruvka_spla`.
 `--mtxpath` (`-m`) and `--out` (`-o`) are required. See `--help` for all flags.
 
 ```bash
-./build/boruvka_spla --mtxpath ../datasets/test_graph.mtx --out result.csv
+./build/boruvka_spla --mtxpath ../graphs/test_graph.mtx --out result.csv
 ```
 
 | Option | Short | Description | Default |
@@ -53,7 +53,15 @@ Binary: `build/boruvka_spla`.
 | `--device` | `-d` | SPLA device index | `0` |
 | `--help` | `-h` | Print help | — |
 
-Flow: load graph → one validation MST run → `warmup` × `boruvka_mst` → `niters` × timed `boruvka_mst` using `spla::Timer` (mean and sample std. dev. in ms). The CSV has a header row plus one data row: `library`, `graph`, `vertices`, `edges` (directed nonzeros), `cores`, `runs`, `mst_weight`, `mst_edges`, `iterations` (same as the number of timed runs), `mean_time_ms`, `std_dev_ms`, `memory_mb` (currently `0`).
+Flow: load graph → one MST run (checks correctness / warms structures) → `warmup` × `boruvka_mst` (not timed) → `niters` × timed `boruvka_mst` with `spla::Timer`; each timed duration is written as its own CSV row.
+
+### CSV output
+
+Header:
+
+`library,graph,vertices,edges,cores,mst_weight,mst_edges,time_ms`
+
+Then **`niters` data rows** (one per timed run). The `graph` column is the basename of the `.mtx` file. `edges` is the count of directed stored nonzeros in the loaded matrix. `mst_weight` and `mst_edges` are the same on every row (from the first MST pass). **`cores` is always `1`** in the file (fixed benchmark metadata, not auto-detected hardware). `time_ms` is floating-point milliseconds for that run (6 decimal places).
 
 ## Tests
 

@@ -1,4 +1,3 @@
-#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -8,7 +7,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <vector>
 
 #include <cxxopts.hpp>
@@ -38,30 +36,6 @@ namespace {
         return out;
     }
 
-    double mean_ms(const std::vector<double>& xs) {
-        if (xs.empty()) {
-            return 0.0;
-        }
-        double s = 0.0;
-        for (double x : xs) {
-            s += x;
-        }
-        return s / static_cast<double>(xs.size());
-    }
-
-    double sample_std_dev_ms(const std::vector<double>& xs) {
-        if (xs.size() < 2) {
-            return 0.0;
-        }
-        const double m   = mean_ms(xs);
-        double       acc = 0.0;
-        for (double x : xs) {
-            const double d = x - m;
-            acc += d * d;
-        }
-        return std::sqrt(acc / static_cast<double>(xs.size() - 1));
-    }
-
     std::uint64_t mst_total_weight(const std::vector<MstEdge>& mst) {
         std::uint64_t s = 0;
         for (const MstEdge& e : mst) {
@@ -80,24 +54,23 @@ namespace {
         return vals_view->get_size() / sizeof(std::uint32_t);
     }
 
-    void write_result_csv(const fs::path&    out_path,
-                          const std::string& graph_label,
-                          spla::uint         n,
-                          std::size_t        directed_edges,
-                          unsigned           cores,
-                          int                niters,
-                          std::uint64_t      mst_weight,
-                          std::size_t        mst_edges,
-                          double             mean_ms,
-                          double             std_dev_ms) {
+    void write_result_csv(const fs::path&                 out_path,
+                          const std::string&              graph_label,
+                          spla::uint                      n,
+                          std::size_t                     directed_edges,
+                          std::uint64_t                   mst_weight,
+                          std::size_t                     mst_edges,
+                          const std::vector<double>&      times_ms) {
         std::ofstream out(out_path);
         if (!out) {
             throw std::runtime_error("cannot open output file: " + out_path.string());
         }
         out << std::fixed << std::setprecision(6);
-        out << "library,graph,vertices,edges,cores,runs,mst_weight,mst_edges,iterations,mean_time_ms,std_dev_ms,memory_mb\n";
-        out << "spla," << csv_field(graph_label) << ',' << n << ',' << directed_edges << ',' << cores << ',' << niters << ','
-            << mst_weight << ',' << mst_edges << ',' << niters << ',' << mean_ms << ',' << std_dev_ms << ",0\n";
+        out << "library,graph,vertices,edges,cores,mst_weight,mst_edges,time_ms\n";
+        for (double time_ms : times_ms) {
+            out << "spla," << csv_field(graph_label) << ',' << n << ',' << directed_edges << ",1,"
+                << mst_weight << ',' << mst_edges << ',' << time_ms << '\n';
+        }
     }
 
 }// namespace
@@ -187,17 +160,9 @@ auto main(int argc, char* argv[]) -> int {
             times_ms.push_back(timer.get_elapsed_ms());
         }
 
-        const double avg   = mean_ms(times_ms);
-        const double stdev = sample_std_dev_ms(times_ms);
-
-        unsigned cores = std::thread::hardware_concurrency();
-        if (cores == 0) {
-            cores = 1;
-        }
-
         const std::string graph_label = fs::path(mtxpath).filename().string();
 
-        write_result_csv(out_path, graph_label, n, directed_edges, cores, niters, w_sum, m_edges, avg, stdev);
+        write_result_csv(out_path, graph_label, n, directed_edges, w_sum, m_edges, times_ms);
 
         library->finalize();
     } catch (const std::exception& e) {
