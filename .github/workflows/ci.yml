@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  spark-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: boruvka/boruvka_spark
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: 'sbt'
+          
+      - name: Setup sbt
+        uses: sbt/setup-sbt@v1
+        
+      - name: Run tests
+        run: sbt test
