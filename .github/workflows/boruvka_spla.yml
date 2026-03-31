@@ -1,0 +1,42 @@
+name: Boruvka SPLA CI
+
+defaults:
+  run:
+    working-directory: boruvka/boruvka_spla
+
+on:
+  push:
+    branches: [main, feat/boruvka_spla]
+    paths:
+      - 'boruvka/boruvka_spla/**'
+      - '.github/workflows/boruvka_spla.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'boruvka/boruvka_spla/**'
+      - '.github/workflows/boruvka_spla.yml'
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: clang-format
+        run: |
+          clang-format --version
+          find src test -type f \( -name '*.cpp' -o -name '*.hpp' \) -print0 |
+            xargs -0 -r clang-format --dry-run --Werror
+
+  test:
+    needs: [lint]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Build
+        run: cmake --build build -j 2
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --no-tests=error -j 2

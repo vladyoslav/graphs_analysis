@@ -1,9 +1,7 @@
-# IDE and editor files
 **/.DS_Store
 .idea/
 .vs/
 .vscode/
-.cursor/
 build/
 cmake-build-*/
 prefix/
@@ -12,11 +10,3 @@ CMakeLists.txt.user
 CMakeUserPresets.json
 compile_commands.json
 .cache/
-.metals/
-.scala-build/
-*.swp
-*.swo
-*~
-
-# Experiment results (generated)
-results/

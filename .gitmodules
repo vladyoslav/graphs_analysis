@@ -1,0 +1,3 @@
+[submodule "boruvka/boruvka_spla/deps/spla"]
+	path = boruvka/boruvka_spla/deps/spla
+	url = https://github.com/SparseLinearAlgebra/spla.git
