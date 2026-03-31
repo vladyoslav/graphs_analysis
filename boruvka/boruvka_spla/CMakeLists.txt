@@ -44,7 +44,7 @@ if(BUILD_TESTING)
   target_link_libraries(lib_test PRIVATE boruvka_spla_lib GTest::gtest_main)
   target_compile_definitions(
     lib_test PRIVATE
-    "TEST_GRAPH_MTX_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/../datasets/test_graph.mtx\"")
+    "TEST_GRAPH_MTX_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/../graphs/test_graph.mtx\"")
   include(GoogleTest)
   gtest_discover_tests(lib_test)
 endif()
