@@ -10,6 +10,7 @@ def download_graph(name, url, graphs_dir):
     """Downloads and extracts a single graph. Returns True on success."""
     final_path = os.path.join(graphs_dir, f"{name}.mtx")
 
+    # Skip if already downloaded
     if os.path.exists(final_path):
         print(f"  [SKIP] {name}.mtx already exists")
         return True
@@ -18,14 +19,15 @@ def download_graph(name, url, graphs_dir):
     zip_path = os.path.join(graphs_dir, f"{name}.zip")
 
     try:
+        # Download zip archive
         urllib.request.urlretrieve(url, zip_path)
 
+        # Extract only the .mtx file, ignore everything else (e.g., readme.html)
         with zipfile.ZipFile(zip_path, "r") as zf:
-            valid_extensions = (".mtx", ".edges")
-            target_files = [f for f in zf.namelist() if f.endswith(valid_extensions)]
+            target_files = [f for f in zf.namelist() if f.endswith(".mtx")]
 
             if not target_files:
-                print(f"  [ERROR] No .mtx or .edges file found in archive for {name}")
+                print(f"  [ERROR] No .mtx file found in archive for {name}")
                 return False
 
             extracted_file = target_files[0]
@@ -38,12 +40,14 @@ def download_graph(name, url, graphs_dir):
                     os.remove(final_path)
                 os.rename(extracted_path, final_path)
 
+        # Clean up the zip file
         os.remove(zip_path)
         print(f"  [OK] {name}.mtx")
         return True
 
     except Exception as e:
         print(f"  [ERROR] {name}: {e}")
+        # Clean up partial or broken downloads
         if os.path.exists(zip_path):
             os.remove(zip_path)
         return False
@@ -76,6 +80,7 @@ def main():
     with open(yaml_path, "r", encoding="utf-8") as f:
         graphs_db = yaml.safe_load(f)
 
+    # Determine which graphs to download
     if args.graphs.lower() == "all":
         target_graphs = list(graphs_db.keys())
     else:
