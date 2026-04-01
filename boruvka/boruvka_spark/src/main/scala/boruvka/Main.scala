@@ -12,7 +12,7 @@ object Main {
     graph.connectedComponents().vertices.map(_._2).distinct().count()
   }
 
-  /** Builds an undirected GraphX graph from result edges. */
+  /** Builds an undirected graph from result edges. */
   def buildMstGraph(sc: SparkContext, edges: List[Boruvka.MstEdge]): Graph[Long, Int] = {
     val graphEdges = sc.parallelize(
       edges.flatMap { e =>
@@ -28,6 +28,16 @@ object Main {
   /** Counts unique vertices covered by result edges. */
   def countCoveredVertices(edges: List[Boruvka.MstEdge]): Int = {
     edges.flatMap(e => List(e.src, e.dst)).distinct.size
+  }
+
+  /** Measures and prints execution time of a named phase. */
+  def timed[T](label: String)(block: => T): T = {
+    val start = System.nanoTime()
+    val result = block
+    val end = System.nanoTime()
+    val ms = (end - start) / 1e6
+    println(f"[TIME] $label: $ms%.2f ms")
+    result
   }
 
   /**
@@ -56,7 +66,6 @@ object Main {
   def main(args: Array[String]): Unit = {
     val params = parseArgs(args)
 
-    // Required parameter
     val inputPath = params.getOrElse("graph", {
       System.err.println("Error: --graph is required.")
       System.err.println("Usage: BoruvkaMST --graph=<path> [--csv=<path>] [--runs=<n>] [--warmup=<n>] [--cores=<n>] [--debug] [--checks]")
@@ -81,7 +90,6 @@ object Main {
       System.exit(1)
     }
 
-    // Optional parameters
     val csvOutputPath = params.get("csv")
     csvOutputPath.foreach { path =>
       val parentDir = new File(path).getParentFile
@@ -152,14 +160,28 @@ object Main {
     var graph: Graph[Long, Double] = null
 
     try {
-      graph = loadMtxGraph(sc, inputPath)
-      graph.cache()
+      graph = timed("load graph") {
+        val g = loadMtxGraph(sc, inputPath)
+        g.cache()
+        g
+      }
 
-      val numVertices = graph.vertices.count()
-      val numEdges = graph.edges.count()
+      val numVertices = timed("count vertices") {
+        graph.vertices.count()
+      }
+
+      val numEdges = timed("count edges") {
+        graph.edges.count()
+      }
+
       val inputComponents =
-        if (checks) countConnectedComponents(graph)
-        else -1L
+        if (checks) {
+          timed("count input components") {
+            countConnectedComponents(graph)
+          }
+        } else {
+          -1L
+        }
 
       val expectedResultEdges =
         if (checks) numVertices - inputComponents
@@ -185,13 +207,13 @@ object Main {
       println(s"debug:              $debug")
       println(s"checks:             $checks")
 
-      // Warmup runs
       for (i <- 0 until numWarmup) {
-        val warmup = Boruvka.run(graph, sc, debug)
+        val warmup = timed(s"warmup ${i + 1}/$numWarmup") {
+          Boruvka.run(graph, sc, debug)
+        }
         println(s"Warmup ${i + 1}/$numWarmup done. weight=${warmup.weight}, edges=${warmup.edges.size}, iterations=${warmup.iterations}")
       }
 
-      // Benchmark runs
       var lastResult: Boruvka.BoruvkaResult = null
       val csvHeader = "library,graph,vertices,edges,cores,mst_weight,mst_edges,time_ms"
       val csvRows = scala.collection.mutable.ArrayBuffer.empty[String]
@@ -213,14 +235,17 @@ object Main {
       }
 
       if (checks) {
-        // Final correctness checks
-        val resultGraph = buildMstGraph(sc, lastResult.edges)
-        val resultComponents = resultGraph.connectedComponents().vertices.map(_._2).distinct().count()
+        val (resultComponents, coveredVertices) = timed("final result check") {
+          val resultGraph = buildMstGraph(sc, lastResult.edges)
+          val components = resultGraph.connectedComponents().vertices.map(_._2).distinct().count()
+          val covered = countCoveredVertices(lastResult.edges)
 
-        resultGraph.unpersistVertices(blocking = false)
-        resultGraph.edges.unpersist(false)
+          resultGraph.unpersistVertices(blocking = false)
+          resultGraph.edges.unpersist(false)
 
-        val coveredVertices = countCoveredVertices(lastResult.edges)
+          (components, covered)
+        }
+
         val vertexCountCorrect = coveredVertices == numVertices
         val componentCountCorrect = resultComponents == inputComponents
         val edgeCountCorrect = lastResult.edges.size == expectedResultEdges
@@ -254,27 +279,31 @@ object Main {
       csvRows.foreach(println)
 
       csvOutputPath.foreach { path =>
-        val file = new File(path)
-        val fileExists = file.exists()
-        val writer = new PrintWriter(new java.io.FileWriter(file, true))
-        try {
-          if (!fileExists) writer.println(csvHeader)
-          csvRows.foreach(writer.println)
-        } finally {
-          writer.close()
+        timed("write csv") {
+          val file = new File(path)
+          val fileExists = file.exists()
+          val writer = new PrintWriter(new java.io.FileWriter(file, true))
+          try {
+            if (!fileExists) writer.println(csvHeader)
+            csvRows.foreach(writer.println)
+          } finally {
+            writer.close()
+          }
+          println(s"\nCSV appended to: $path")
         }
-        println(s"\nCSV appended to: $path")
       }
 
     } finally {
       if (graph != null) {
         graph.unpersist(false)
       }
-      sc.stop()
+      timed("spark stop") {
+        sc.stop()
+      }
     }
   }
 
-  /** Loads a Matrix Market (.mtx) file into a GraphX graph using Spark I/O. */
+  /** Loads a Matrix Market (.mtx) file into a GraphX graph. */
   def loadMtxGraph(sc: SparkContext, path: String): Graph[Long, Double] = {
     val lines = sc.textFile(path).filter(_.trim.nonEmpty).cache()
 
@@ -301,9 +330,8 @@ object Main {
         } else {
           val w =
             if (hasWeights && p.length >= 3) p(2).toDouble
-            else {
-              math.min(src, dst).toDouble
-            }
+            else math.min(src, dst).toDouble
+
           if (isSymmetric) Iterator(Edge(src, dst, w), Edge(dst, src, w))
           else Iterator(Edge(src, dst, w))
         }
