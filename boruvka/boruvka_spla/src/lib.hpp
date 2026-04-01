@@ -20,7 +20,7 @@ inline constexpr std::uint32_t MST_EDGE_SENTINEL_W = INF;
 
 // Packed UINT edge value: neighbor index in low EDGE_ENCODE_SHIFT bits, weight in high (32 - EDGE_ENCODE_SHIFT) bits.
 // MIN order: smaller weight first, then smaller neighbor index. Keep EDGE_ENCODE_SHIFT in [1, 31].
-inline constexpr std::uint32_t EDGE_ENCODE_SHIFT = 20;
+inline constexpr std::uint32_t EDGE_ENCODE_SHIFT = 22;
 inline constexpr std::uint32_t EDGE_ENCODE_INDEX_MASK =
         (std::uint32_t{1} << EDGE_ENCODE_SHIFT) - std::uint32_t{1};
 // Vertices are 0 .. n-1 with n-1 <= EDGE_ENCODE_INDEX_MASK.

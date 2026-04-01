@@ -125,10 +125,13 @@ auto main(int argc, char* argv[]) -> int {
         return 1;
     }
 
+    std::string    acc_info;
     spla::Library* library = spla::Library::get();
     library->set_platform(platform);
     library->set_device(device);
     library->set_queues_count(1);
+    library->get_accelerator_info(acc_info);
+    std::cout << "env: " << acc_info << std::endl;
 
     try {
         spla::ref_ptr<spla::Matrix> graph = load_graph(mtxpath);
