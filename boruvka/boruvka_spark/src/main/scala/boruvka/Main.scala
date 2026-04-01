@@ -36,11 +36,14 @@ object Main {
    * Supported forms:
    *   --key=value
    *   --debug
+   *   --checks
    */
   private def parseArgs(args: Array[String]): Map[String, String] = {
     args.flatMap { arg =>
       if (arg == "--debug") {
         Some("debug" -> "true")
+      } else if (arg == "--checks") {
+        Some("checks" -> "true")
       } else if (arg.startsWith("--") && arg.contains("=")) {
         val parts = arg.drop(2).split("=", 2)
         Some(parts(0) -> parts(1))
@@ -56,13 +59,14 @@ object Main {
     // Required parameter
     val inputPath = params.getOrElse("graph", {
       System.err.println("Error: --graph is required.")
-      System.err.println("Usage: BoruvkaMST --graph=<path> [--csv=<path>] [--runs=<n>] [--warmup=<n>] [--cores=<n>] [--debug]")
+      System.err.println("Usage: BoruvkaMST --graph=<path> [--csv=<path>] [--runs=<n>] [--warmup=<n>] [--cores=<n>] [--debug] [--checks]")
       System.err.println("  --graph   path to .mtx file (required)")
       System.err.println("  --csv     path to save CSV results (optional)")
       System.err.println("  --runs    number of benchmark runs (default: 5)")
       System.err.println("  --warmup  number of warmup runs (default: 3)")
       System.err.println("  --cores   number of CPU cores (default: * = all)")
       System.err.println("  --debug   enable per-iteration debug log (optional flag)")
+      System.err.println("  --checks  enable final correctness checks (optional flag)")
       System.exit(1)
       ""
     })
@@ -129,14 +133,15 @@ object Main {
     }
 
     val debug = params.get("debug").contains("true")
+    val checks = params.get("checks").contains("true")
 
     val conf = new SparkConf()
       .setAppName("BoruvkaMST")
       .setMaster(s"local[$numCores]")
       .set("spark.ui.enabled", "false")
       .set("spark.eventLog.enabled", "false")
-      .set("spark.driver.memory", "4g")
-      .set("spark.executor.memory", "4g")
+      .set("spark.driver.memory", "16g")
+      .set("spark.executor.memory", "16g")
 
     val sc = new SparkContext(conf)
     sc.setLogLevel("ERROR")
@@ -144,14 +149,22 @@ object Main {
 
     val actualCores = sc.defaultParallelism
 
+    var graph: Graph[Long, Double] = null
+
     try {
-      val graph = loadMtxGraph(sc, inputPath)
+      graph = loadMtxGraph(sc, inputPath)
       graph.cache()
 
       val numVertices = graph.vertices.count()
       val numEdges = graph.edges.count()
-      val inputComponents = countConnectedComponents(graph)
-      val expectedResultEdges = numVertices - inputComponents
+      val inputComponents =
+        if (checks) countConnectedComponents(graph)
+        else -1L
+
+      val expectedResultEdges =
+        if (checks) numVertices - inputComponents
+        else -1L
+
       val graphName = inputFile.getName
 
       println()
@@ -159,12 +172,18 @@ object Main {
       println(s"graph:              $graphName")
       println(s"vertices:           $numVertices")
       println(s"edges:              $numEdges")
-      println(s"components:         $inputComponents")
-      println(s"expected_mst_edges: $expectedResultEdges")
+      if (checks) {
+        println(s"components:         $inputComponents")
+        println(s"expected_mst_edges: $expectedResultEdges")
+      } else {
+        println(s"components:         skipped")
+        println(s"expected_mst_edges: skipped")
+      }
       println(s"cores:              $actualCores")
       println(s"warmup_runs:        $numWarmup")
       println(s"benchmark_runs:     $numRuns")
       println(s"debug:              $debug")
+      println(s"checks:             $checks")
 
       // Warmup runs
       for (i <- 0 until numWarmup) {
@@ -193,29 +212,31 @@ object Main {
         csvRows += row
       }
 
-      // Final correctness checks
-      val resultGraph = buildMstGraph(sc, lastResult.edges)
-      val resultComponents = resultGraph.connectedComponents().vertices.map(_._2).distinct().count()
+      if (checks) {
+        // Final correctness checks
+        val resultGraph = buildMstGraph(sc, lastResult.edges)
+        val resultComponents = resultGraph.connectedComponents().vertices.map(_._2).distinct().count()
 
-      resultGraph.unpersistVertices(blocking = false)
-      resultGraph.edges.unpersist(false)
+        resultGraph.unpersistVertices(blocking = false)
+        resultGraph.edges.unpersist(false)
 
-      val coveredVertices = countCoveredVertices(lastResult.edges)
-      val vertexCountCorrect = coveredVertices == numVertices
-      val componentCountCorrect = resultComponents == inputComponents
-      val edgeCountCorrect = lastResult.edges.size == expectedResultEdges
+        val coveredVertices = countCoveredVertices(lastResult.edges)
+        val vertexCountCorrect = coveredVertices == numVertices
+        val componentCountCorrect = resultComponents == inputComponents
+        val edgeCountCorrect = lastResult.edges.size == expectedResultEdges
 
-      println()
-      println("=== RESULT CHECK ===")
-      println(s"input_vertices:          $numVertices")
-      println(s"result_vertices_covered: $coveredVertices")
-      println(s"vertex_count_correct:    $vertexCountCorrect")
-      println(s"input_components:        $inputComponents")
-      println(s"result_components:       $resultComponents")
-      println(s"component_count_correct: $componentCountCorrect")
-      println(s"expected_result_edges:   $expectedResultEdges")
-      println(s"actual_result_edges:     ${lastResult.edges.size}")
-      println(s"edge_count_correct:      $edgeCountCorrect")
+        println()
+        println("=== RESULT CHECK ===")
+        println(s"input_vertices:          $numVertices")
+        println(s"result_vertices_covered: $coveredVertices")
+        println(s"vertex_count_correct:    $vertexCountCorrect")
+        println(s"input_components:        $inputComponents")
+        println(s"result_components:       $resultComponents")
+        println(s"component_count_correct: $componentCountCorrect")
+        println(s"expected_result_edges:   $expectedResultEdges")
+        println(s"actual_result_edges:     ${lastResult.edges.size}")
+        println(s"edge_count_correct:      $edgeCountCorrect")
+      }
 
       println()
       println("=== RESULTS ===")
@@ -246,6 +267,9 @@ object Main {
       }
 
     } finally {
+      if (graph != null) {
+        graph.unpersist(false)
+      }
       sc.stop()
     }
   }

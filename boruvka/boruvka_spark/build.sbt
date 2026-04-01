@@ -15,10 +15,10 @@ lazy val root = (project in file("."))
     ),
     
     fork := true,
-
+    
     javaOptions ++= Seq(
-      "-Xms1g",
-      "-Xmx4g",
+      "-Xms4g",
+      "-Xmx16g",
       "-XX:+UseG1GC"
     )
   )
