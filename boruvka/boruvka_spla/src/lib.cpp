@@ -90,10 +90,12 @@ spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path) {
     // Phase: parse dimensions (n, nnz) from the first non-comment line.
     parse_size_line(read_first_data_line(in), n, nnz);
 
-    if (n > EDGE_ENCODE_MAX_N) {
-        throw std::runtime_error("mtx: n must be <= 2^EDGE_ENCODE_SHIFT (" +
-                                 std::to_string(EDGE_ENCODE_MAX_N) + ")");
+    const std::uint32_t shift = edge_encode_shift_for_n(n);
+    if (shift > 31u) {
+        throw std::runtime_error("mtx: n too large for 32-bit packed (weight, neighbor) encoding (n=" +
+                                 std::to_string(n) + ")");
     }
+    const std::uint32_t max_w = edge_max_weight_for_shift(shift);
 
     // Phase: allocate n×n UINT matrix; absent edges use INF (must not collide with encode_edge).
     spla::ref_ptr<spla::Matrix> A = spla::Matrix::make(n, n, spla::UINT);
@@ -131,12 +133,12 @@ spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path) {
         v -= 1;
 
         if (u != v) {
-            if (w > EDGE_ENCODE_MAX_WEIGHT) {
-                throw std::runtime_error("mtx: weight too large for (32 - EDGE_ENCODE_SHIFT) high bits (max " +
-                                         std::to_string(EDGE_ENCODE_MAX_WEIGHT) + "): " + line);
+            if (w > max_w) {
+                throw std::runtime_error("mtx: weight too large for encode shift " + std::to_string(shift) +
+                                         " (max " + std::to_string(max_w) + "): " + line);
             }
-            const std::uint32_t enc_uv = encode_edge(w, v);
-            const std::uint32_t enc_vu = encode_edge(w, u);
+            const std::uint32_t enc_uv = encode_edge(w, v, shift);
+            const std::uint32_t enc_vu = encode_edge(w, u, shift);
             if (enc_uv == INF || enc_vu == INF) {
                 throw std::runtime_error("mtx: encoded edge collides with absent-edge fill value: " + line);
             }
@@ -149,7 +151,8 @@ spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path) {
 }
 
 std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A) {
-    const spla::uint     n = A->get_n_rows();
+    const spla::uint    n         = A->get_n_rows();
+    const std::uint32_t enc_shift = edge_encode_shift_for_n(n);
     std::vector<MstEdge> result;
     if (n <= 1) {
         return result;
@@ -202,7 +205,7 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A) {
             const spla::uint root = dsu.find(v);
             std::uint32_t    w_dec;
             spla::uint       dst;
-            decode_edge(code, w_dec, dst);
+            decode_edge(code, w_dec, dst, enc_shift);
             const MstEdge& cur    = min_edge[root];
             const bool     better = w_dec < cur.w || (w_dec == cur.w && dst < cur.v);
             if (better) {
