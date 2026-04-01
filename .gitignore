@@ -20,3 +20,9 @@ compile_commands.json
 
 # Experiment results (generated)
 results/
+
+# Ignore all files in graphs/ except for a few specific .mtx files
+graphs/
+!graphs/test_graph.mtx
+!graphs/two_components_path.mtx
+!graphs/unweighted_path4.mtx
