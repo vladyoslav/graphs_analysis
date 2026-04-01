@@ -12,7 +12,7 @@ object Main {
     graph.connectedComponents().vertices.map(_._2).distinct().count()
   }
 
-  /** Builds an undirected graph from result edges. */
+  /** Builds an undirected GraphX graph from result edges. */
   def buildMstGraph(sc: SparkContext, edges: List[Boruvka.MstEdge]): Graph[Long, Int] = {
     val graphEdges = sc.parallelize(
       edges.flatMap { e =>
@@ -47,6 +47,7 @@ object Main {
    *   --key=value
    *   --debug
    *   --checks
+   *   --profile
    */
   private def parseArgs(args: Array[String]): Map[String, String] = {
     args.flatMap { arg =>
@@ -54,6 +55,8 @@ object Main {
         Some("debug" -> "true")
       } else if (arg == "--checks") {
         Some("checks" -> "true")
+      } else if (arg == "--profile") {
+        Some("profile" -> "true")
       } else if (arg.startsWith("--") && arg.contains("=")) {
         val parts = arg.drop(2).split("=", 2)
         Some(parts(0) -> parts(1))
@@ -68,14 +71,15 @@ object Main {
 
     val inputPath = params.getOrElse("graph", {
       System.err.println("Error: --graph is required.")
-      System.err.println("Usage: BoruvkaMST --graph=<path> [--csv=<path>] [--runs=<n>] [--warmup=<n>] [--cores=<n>] [--debug] [--checks]")
-      System.err.println("  --graph   path to .mtx file (required)")
-      System.err.println("  --csv     path to save CSV results (optional)")
-      System.err.println("  --runs    number of benchmark runs (default: 5)")
-      System.err.println("  --warmup  number of warmup runs (default: 3)")
-      System.err.println("  --cores   number of CPU cores (default: * = all)")
-      System.err.println("  --debug   enable per-iteration debug log (optional flag)")
-      System.err.println("  --checks  enable final correctness checks (optional flag)")
+      System.err.println("Usage: BoruvkaMST --graph=<path> [--csv=<path>] [--runs=<n>] [--warmup=<n>] [--cores=<n>] [--debug] [--checks] [--profile]")
+      System.err.println("  --graph    path to .mtx file (required)")
+      System.err.println("  --csv      path to save CSV results (optional)")
+      System.err.println("  --runs     number of benchmark runs (default: 5)")
+      System.err.println("  --warmup   number of warmup runs (default: 3)")
+      System.err.println("  --cores    number of CPU cores (default: * = all)")
+      System.err.println("  --debug    enable per-iteration debug log (optional flag)")
+      System.err.println("  --checks   enable final correctness checks (optional flag)")
+      System.err.println("  --profile  enable per-step profiling inside Boruvka (optional flag)")
       System.exit(1)
       ""
     })
@@ -142,6 +146,7 @@ object Main {
 
     val debug = params.get("debug").contains("true")
     val checks = params.get("checks").contains("true")
+    val profile = params.get("profile").contains("true")
 
     val conf = new SparkConf()
       .setAppName("BoruvkaMST")
@@ -206,10 +211,11 @@ object Main {
       println(s"benchmark_runs:     $numRuns")
       println(s"debug:              $debug")
       println(s"checks:             $checks")
+      println(s"profile:            $profile")
 
       for (i <- 0 until numWarmup) {
         val warmup = timed(s"warmup ${i + 1}/$numWarmup") {
-          Boruvka.run(graph, sc, debug)
+          Boruvka.run(graph, sc, debug, profile)
         }
         println(s"Warmup ${i + 1}/$numWarmup done. weight=${warmup.weight}, edges=${warmup.edges.size}, iterations=${warmup.iterations}")
       }
@@ -221,7 +227,7 @@ object Main {
       for (i <- 0 until numRuns) {
         System.gc()
         val startTime = System.nanoTime()
-        lastResult = Boruvka.run(graph, sc, debug)
+        lastResult = Boruvka.run(graph, sc, debug, profile)
         val endTime = System.nanoTime()
         val timeMs = (endTime - startTime) / 1e6
 

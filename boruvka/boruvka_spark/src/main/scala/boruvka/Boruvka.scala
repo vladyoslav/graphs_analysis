@@ -48,12 +48,34 @@ object Boruvka {
         true
       }
     }
+
+    def roots(keys: Iterable[Long]): Map[Long, Long] = {
+      keys.map(k => k -> find(k)).toMap
+    }
+  }
+
+  /** Measures a step inside Boruvka when profiling is enabled. */
+  private def timedStep[T](enabled: Boolean, label: String)(block: => T): T = {
+    if (!enabled) block
+    else {
+      val start = System.nanoTime()
+      val result = block
+      val end = System.nanoTime()
+      val ms = (end - start) / 1e6
+      println(f"[PROFILE] $label: $ms%.2f ms")
+      result
+    }
   }
 
   /**
    * Runs Boruvka's algorithm using GraphX/Spark primitives.
    */
-  def run(graph: Graph[Long, Double], sc: SparkContext, debug: Boolean = false): BoruvkaResult = {
+  def run(
+    graph: Graph[Long, Double],
+    sc: SparkContext,
+    debug: Boolean = false,
+    profile: Boolean = false
+  ): BoruvkaResult = {
     var currentGraph = graph.mapVertices((vid, _) => vid)
     currentGraph.cache()
     currentGraph.vertices.count()
@@ -71,18 +93,22 @@ object Boruvka {
       }
 
       val cheapestPerVertex: VertexRDD[(Long, Long, Double)] =
-        currentGraph.aggregateMessages[(Long, Long, Double)](
-          sendMsg = ctx => {
-            if (ctx.srcAttr != ctx.dstAttr) {
-              val edge = (ctx.srcId, ctx.dstId, ctx.attr)
-              ctx.sendToSrc(edge)
-              ctx.sendToDst(edge)
-            }
-          },
-          mergeMsg = (a, b) => if (a._3 <= b._3) a else b
-        ).cache()
+        timedStep(profile, s"iter $iterations - aggregateMessages") {
+          currentGraph.aggregateMessages[(Long, Long, Double)](
+            sendMsg = ctx => {
+              if (ctx.srcAttr != ctx.dstAttr) {
+                val edge = (ctx.srcId, ctx.dstId, ctx.attr)
+                ctx.sendToSrc(edge)
+                ctx.sendToDst(edge)
+              }
+            },
+            mergeMsg = (a, b) => if (a._3 <= b._3) a else b
+          ).cache()
+        }
 
-      val hasCheapest = cheapestPerVertex.take(1).nonEmpty
+      val hasCheapest = timedStep(profile, s"iter $iterations - check cheapest non-empty") {
+        cheapestPerVertex.take(1).nonEmpty
+      }
 
       if (!hasCheapest) {
         cheapestPerVertex.unpersist()
@@ -94,37 +120,47 @@ object Boruvka {
 
         continueLoop = false
       } else {
-        val cheapestPerComponent = cheapestPerVertex
-          .innerJoin(currentGraph.vertices) {
-            (_, edgeData, compId) => (compId, edgeData)
-          }
-          .map { case (_, (compId, edgeData)) => (compId, edgeData) }
-          .reduceByKey((a, b) => if (a._3 <= b._3) a else b)
-          .cache()
+        val cheapestPerComponent = timedStep(profile, s"iter $iterations - cheapestPerComponent") {
+          cheapestPerVertex
+            .innerJoin(currentGraph.vertices) {
+              (_, edgeData, compId) => (compId, edgeData)
+            }
+            .map { case (_, (compId, edgeData)) => (compId, edgeData) }
+            .reduceByKey((a, b) => if (a._3 <= b._3) a else b)
+            .cache()
+        }
 
-        val candidateEdgesLocal: List[CandidateEdge] = cheapestPerComponent
-          .values
-          .keyBy { case (srcVertex, _, _) => srcVertex }
-          .join(currentGraph.vertices)
-          .map { case (_, ((srcVertex, dstVertex, weight), srcComp)) =>
-            (dstVertex, (srcVertex, dstVertex, weight, srcComp))
-          }
-          .join(currentGraph.vertices)
-          .map { case (_, ((srcVertex, dstVertex, weight, srcComp), dstComp)) =>
-            val (s, d) =
-              if (srcVertex < dstVertex) (srcVertex, dstVertex)
-              else (dstVertex, srcVertex)
+        val componentMap = timedStep(profile, s"iter $iterations - collect component map") {
+          currentGraph.vertices.collectAsMap()
+        }
 
-            val (c1, c2) =
-              if (srcComp < dstComp) (srcComp, dstComp)
-              else (dstComp, srcComp)
+        val selectedEdges = timedStep(profile, s"iter $iterations - collect selected edges") {
+          cheapestPerComponent.values.collect().toList
+        }
 
-            CandidateEdge(s, d, weight, c1, c2)
-          }
-          .filter(e => e.srcComp != e.dstComp)
-          .distinct()
-          .collect()
-          .toList
+        val candidateEdgesLocal = timedStep(profile, s"iter $iterations - build candidate edges locally") {
+          selectedEdges
+            .flatMap { case (srcVertex, dstVertex, weight) =>
+              val srcComp = componentMap.get(srcVertex)
+              val dstComp = componentMap.get(dstVertex)
+
+              (srcComp, dstComp) match {
+                case (Some(scid), Some(dcid)) if scid != dcid =>
+                  val (s, d) =
+                    if (srcVertex < dstVertex) (srcVertex, dstVertex)
+                    else (dstVertex, srcVertex)
+
+                  val (c1, c2) =
+                    if (scid < dcid) (scid, dcid)
+                    else (dcid, scid)
+
+                  Some(CandidateEdge(s, d, weight, c1, c2))
+                case _ =>
+                  None
+              }
+            }
+            .distinct
+        }
 
         if (debug) {
           println(s"[Boruvka] iteration $iterations: candidate edges = ${candidateEdgesLocal.size}")
@@ -141,10 +177,12 @@ object Boruvka {
 
           continueLoop = false
         } else {
-          val uf = new UnionFind
-          val acceptedCandidates = candidateEdgesLocal
-            .sortBy(e => (e.weight, e.src, e.dst))
-            .filter(e => uf.union(e.srcComp, e.dstComp))
+          val acceptedCandidates = timedStep(profile, s"iter $iterations - filter accepted edges locally") {
+            val uf = new UnionFind
+            candidateEdgesLocal
+              .sortBy(e => (e.weight, e.src, e.dst))
+              .filter(e => uf.union(e.srcComp, e.dstComp))
+          }
 
           val acceptedEdgesLocal = acceptedCandidates.map(e => MstEdge(e.src, e.dst, e.weight))
 
@@ -165,21 +203,11 @@ object Boruvka {
           } else {
             mstResult = mstResult ++ acceptedEdgesLocal
 
-            val acceptedMergeEdges: RDD[Edge[Int]] = sc.parallelize(
-              acceptedCandidates.flatMap { e =>
-                Seq(
-                  Edge(e.srcComp, e.dstComp, 1),
-                  Edge(e.dstComp, e.srcComp, 1)
-                )
-              }
-            ).distinct().cache()
-
-            val hasMerges = acceptedMergeEdges.take(1).nonEmpty
+            val hasMerges = acceptedCandidates.nonEmpty
 
             if (!hasMerges) {
               cheapestPerVertex.unpersist()
               cheapestPerComponent.unpersist()
-              acceptedMergeEdges.unpersist()
 
               if (debug) {
                 val iterTimeMs = (System.nanoTime() - iterStart) / 1e6
@@ -188,37 +216,45 @@ object Boruvka {
 
               continueLoop = false
             } else {
-              val mergeVertices: RDD[(VertexId, Long)] = acceptedMergeEdges
-                .flatMap(e => Seq(e.srcId, e.dstId))
-                .distinct()
-                .map(cid => (cid, cid))
+              val mergedComponentsRdd: RDD[(VertexId, VertexId)] =
+                timedStep(profile, s"iter $iterations - build component remap locally") {
+                  val uf = new UnionFind
+                  acceptedCandidates.foreach(e => uf.union(e.srcComp, e.dstComp))
 
-              val componentMergeGraph = Graph(mergeVertices, acceptedMergeEdges, 0L)
-
-              val mergedComponents: VertexRDD[VertexId] = componentMergeGraph
-                .connectedComponents()
-                .vertices
-                .cache()
+                  val allComps = acceptedCandidates.flatMap(e => Seq(e.srcComp, e.dstComp)).distinct
+                  val remap = uf.roots(allComps)
+                  sc.parallelize(remap.toSeq)
+                }
 
               val prevGraph = currentGraph
 
-              val vertexToNewComponent: RDD[(VertexId, VertexId)] = currentGraph.vertices
-                .map { case (vertexId, oldCompId) => (oldCompId, vertexId) }
-                .join(mergedComponents)
-                .map { case (_, (vertexId, newCompId)) => (vertexId, newCompId) }
-
-              currentGraph = currentGraph
-                .outerJoinVertices(vertexToNewComponent) {
-                  case (_, oldCompId, Some(newCompId)) => newCompId
-                  case (_, oldCompId, None)            => oldCompId
+              val vertexToNewComponent: RDD[(VertexId, VertexId)] =
+                timedStep(profile, s"iter $iterations - build vertex relabel map") {
+                  currentGraph.vertices
+                    .map { case (vertexId, oldCompId) => (oldCompId, vertexId) }
+                    .join(mergedComponentsRdd)
+                    .map { case (_, (vertexId, newCompId)) => (vertexId, newCompId) }
                 }
-                .subgraph(epred = triplet => triplet.srcAttr != triplet.dstAttr)
-                .cache()
 
-              currentGraph.vertices.count()
+              currentGraph = timedStep(profile, s"iter $iterations - relabel and prune graph") {
+                currentGraph
+                  .outerJoinVertices(vertexToNewComponent) {
+                    case (_, oldCompId, Some(newCompId)) => newCompId
+                    case (_, oldCompId, None)            => oldCompId
+                  }
+                  .subgraph(epred = triplet => triplet.srcAttr != triplet.dstAttr)
+                  .cache()
+              }
 
-              if (debug) {
-                val currentEdges = currentGraph.edges.count()
+              timedStep(profile, s"iter $iterations - materialize updated graph") {
+                currentGraph.vertices.count()
+              }
+
+              if (debug || profile) {
+                val currentEdges = timedStep(profile, s"iter $iterations - count remaining edges") {
+                  currentGraph.edges.count()
+                }
+
                 val iterTimeMs = (System.nanoTime() - iterStart) / 1e6
 
                 println(
@@ -232,8 +268,6 @@ object Boruvka {
 
               cheapestPerVertex.unpersist()
               cheapestPerComponent.unpersist()
-              acceptedMergeEdges.unpersist()
-              mergedComponents.unpersist()
               prevGraph.unpersist()
             }
           }
