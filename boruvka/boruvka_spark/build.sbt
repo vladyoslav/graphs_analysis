@@ -12,5 +12,13 @@ lazy val root = (project in file("."))
       "org.apache.spark" %% "spark-graphx" % "3.5.1",
 
       "org.scalatest" %% "scalatest" % "3.2.17" % Test
+    ),
+    
+    fork := true,
+
+    javaOptions ++= Seq(
+      "-Xms1g",
+      "-Xmx4g",
+      "-XX:+UseG1GC"
     )
   )

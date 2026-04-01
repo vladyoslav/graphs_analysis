@@ -15,11 +15,15 @@ object Boruvka {
   )
 
   /**
-   * Runs Boruvka's algorithm to find the Minimum Spanning Tree.
+   * Runs Boruvka's algorithm using GraphX/Spark primitives.
+   *
+   * Vertex attribute = current component id.
+   * Edge attribute   = edge weight.
    */
-  def run(graph: Graph[Long, Double], sc: SparkContext): BoruvkaResult = {
+  def run(graph: Graph[Long, Double], sc: SparkContext, debug: Boolean = false): BoruvkaResult = {
     var currentGraph = graph.mapVertices((vid, _) => vid)
     currentGraph.cache()
+    currentGraph.vertices.count()
 
     var mstResult = List.empty[MstEdge]
     var continueLoop = true
@@ -27,32 +31,49 @@ object Boruvka {
 
     while (continueLoop) {
       iterations += 1
+      val iterStart = System.nanoTime()
 
-      // Find cheapest crossing edge for each vertex
-      val cheapestPerVertex = currentGraph.aggregateMessages[(Long, Long, Double)](
-        ctx => {
-          if (ctx.srcAttr != ctx.dstAttr) {
-            val msg = (ctx.srcId, ctx.dstId, ctx.attr)
-            ctx.sendToSrc(msg)
-            ctx.sendToDst(msg)
-          }
-        },
-        (a, b) => if (a._3 <= b._3) a else b
-      )
+      if (debug) {
+        println(s"[Boruvka] iteration $iterations started")
+      }
 
-      if (cheapestPerVertex.isEmpty()) {
+      // Step 1: for every vertex, find the cheapest outgoing edge
+      val cheapestPerVertex: VertexRDD[(Long, Long, Double)] =
+        currentGraph.aggregateMessages[(Long, Long, Double)](
+          sendMsg = ctx => {
+            if (ctx.srcAttr != ctx.dstAttr) {
+              val edge = (ctx.srcId, ctx.dstId, ctx.attr)
+              ctx.sendToSrc(edge)
+              ctx.sendToDst(edge)
+            }
+          },
+          mergeMsg = (a, b) => if (a._3 <= b._3) a else b
+        ).cache()
+
+      val hasCheapest = cheapestPerVertex.take(1).nonEmpty
+
+      if (!hasCheapest) {
+        cheapestPerVertex.unpersist()
+
+        if (debug) {
+          val iterTimeMs = (System.nanoTime() - iterStart) / 1e6
+          println(s"[Boruvka] iteration $iterations finished: no crossing edges, stopping (${ "%.2f".format(iterTimeMs) } ms)")
+        }
+
         continueLoop = false
       } else {
-        // Aggregate per component
+
+        // Step 2: choose one cheapest outgoing edge per component
         val cheapestPerComponent = cheapestPerVertex
           .innerJoin(currentGraph.vertices) {
             (_, edgeData, compId) => (compId, edgeData)
           }
           .map { case (_, (compId, edgeData)) => (compId, edgeData) }
           .reduceByKey((a, b) => if (a._3 <= b._3) a else b)
+          .cache()
 
-        // Normalize and deduplicate
-        val newEdges = cheapestPerComponent.values
+        // Step 3: normalize and collect newly selected result edges
+        val newEdgesLocal = cheapestPerComponent.values
           .map { case (s, d, w) =>
             if (s < d) MstEdge(s, d, w) else MstEdge(d, s, w)
           }
@@ -60,37 +81,78 @@ object Boruvka {
           .collect()
           .toList
 
-        if (newEdges.isEmpty) {
+        if (debug) {
+          println(s"[Boruvka] iteration $iterations: selected ${newEdgesLocal.size} new edges")
+        }
+
+        if (newEdgesLocal.isEmpty) {
+          cheapestPerVertex.unpersist()
+          cheapestPerComponent.unpersist()
+
+          if (debug) {
+            val iterTimeMs = (System.nanoTime() - iterStart) / 1e6
+            println(s"[Boruvka] iteration $iterations finished: no new edges, stopping (${ "%.2f".format(iterTimeMs) } ms)")
+          }
+
           continueLoop = false
         } else {
-          mstResult = mstResult ++ newEdges
+          mstResult = mstResult ++ newEdgesLocal
 
-          // Rebuild component labels
-          val mstEdgeRdd: RDD[Edge[Long]] = sc.parallelize(
-            mstResult.flatMap(e =>
-              List(Edge(e.src, e.dst, 0L), Edge(e.dst, e.src, 0L))
-            )
+          // Step 4: rebuild connected components from the real accumulated forest
+          val forestEdges: RDD[Edge[Int]] = sc.parallelize(
+            mstResult.flatMap { e =>
+              List(
+                Edge(e.src, e.dst, 1),
+                Edge(e.dst, e.src, 1)
+              )
+            }
           )
-          val allVertices = currentGraph.vertices.mapValues(_ => 0L)
-          val updatedComponents = Graph(allVertices, mstEdgeRdd, 0L)
+
+          val forestVertices: RDD[(VertexId, Long)] = currentGraph.vertices.mapValues(_ => 0L)
+
+          val updatedComponents: VertexRDD[VertexId] = Graph(forestVertices, forestEdges, 0L)
             .connectedComponents()
             .vertices
+            .cache()
 
-          // Apply new labels and prune intra-component edges
-          val prev = currentGraph
+          val prevGraph = currentGraph
+
+          // Step 5: update vertex component labels and remove intra-component edges
           currentGraph = currentGraph
             .outerJoinVertices(updatedComponents) {
-              (vid, _, opt) => opt.getOrElse(vid)
+              case (vid, _, Some(newCompId)) => newCompId
+              case (vid, _, None)            => vid
             }
-            .subgraph(t => t.srcAttr != t.dstAttr)
+            .subgraph(epred = triplet => triplet.srcAttr != triplet.dstAttr)
+            .cache()
 
-          currentGraph.cache()
           currentGraph.vertices.count()
-          prev.unpersist()
+
+          if (debug) {
+            val currentEdges = currentGraph.edges.count()
+            val iterTimeMs = (System.nanoTime() - iterStart) / 1e6
+
+            println(
+              s"[Boruvka] iteration $iterations finished: " +
+              s"mst_edges_added=${newEdgesLocal.size}, " +
+              s"mst_edges_total=${mstResult.size}, " +
+              s"remaining_edges=$currentEdges, " +
+              s"time_ms=${"%.2f".format(iterTimeMs)}"
+            )
+          }
+
+          cheapestPerVertex.unpersist()
+          cheapestPerComponent.unpersist()
+          updatedComponents.unpersist()
+          prevGraph.unpersist()
         }
       }
     }
 
-    BoruvkaResult(mstResult, mstResult.map(_.weight).sum, iterations)
+    BoruvkaResult(
+      edges = mstResult,
+      weight = mstResult.map(_.weight).sum,
+      iterations = iterations
+    )
   }
 }
