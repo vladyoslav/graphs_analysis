@@ -105,7 +105,7 @@ spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path) {
         throw std::runtime_error("mtx: set_fill_value failed");
     }
 
-    // Phase: read nnz lines "u v w" (1-based); store undirected encoded edges (u,v) and (v,u).
+    // Phase: read nnz lines "u v [w]" (1-based); missing w defaults to 1; store undirected encoded edges (u,v) and (v,u).
     std::string line;
     for (std::size_t i = 0; i < nnz; ++i) {
         if (!std::getline(in, line)) {
@@ -115,10 +115,13 @@ spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path) {
 
         spla::uint         u = 0;
         spla::uint         v = 0;
-        std::uint32_t      w = 0;
+        std::uint32_t      w = 1;
         std::istringstream body(line);
-        if (!(body >> u >> v >> w)) {
-            throw std::runtime_error("mtx: edge line must have u v w: " + line);
+        if (!(body >> u >> v)) {
+            throw std::runtime_error("mtx: edge line must have u v [w]: " + line);
+        }
+        if (!(body >> w)) {
+            w = 1;
         }
 
         if (u == 0 || v == 0 || u > n || v > n) {
@@ -178,7 +181,9 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A) {
     spla::ref_ptr<spla::Vector> row_min = spla::Vector::make(n, spla::UINT);
     (void) row_min->set_fill_value(inf);
 
-    while (result.size() < static_cast<std::size_t>(n - 1)) {
+    bool S_is_empty = false;
+
+    while (!S_is_empty) {
         // --- Phase 1: for every vertex v, cheapest outgoing edge in S (SPLA row-wise MIN on packed codes). ---
         for (MstEdge& e : min_edge) {
             e.w = INF;
@@ -244,11 +249,14 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A) {
         const auto*       vals =
                 reinterpret_cast<const std::uint32_t*>(vals_view->get_buffer());
 
+        // After swap, S holds cross-component edges only; true iff no set_uint was called on S_new.
+        S_is_empty = true;
         for (std::size_t k = 0; k < nnz_s; ++k) {
             const spla::uint r = rows[k];
             const spla::uint c = cols[k];
             if (dsu.find(r) != dsu.find(c)) {
                 (void) S_new->set_uint(r, c, vals[k]);
+                S_is_empty = false;
             }
         }
         std::swap(S, S_new);

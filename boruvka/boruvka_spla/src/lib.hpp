@@ -36,7 +36,7 @@ inline void decode_edge(std::uint32_t code, std::uint32_t& weight, spla::uint& n
     neighbor_index = static_cast<spla::uint>(code & EDGE_ENCODE_INDEX_MASK);
 }
 
-// Square Matrix Market (.mtx): preamble with %-lines; then "n m nnz"; then nnz lines "u v w" (1-based u,v; w read as uint32).
+// Square Matrix Market (.mtx): preamble with %-lines; then "n m nnz"; then nnz lines "u v [w]" (1-based u,v; w optional uint32, default 1).
 // UINT adjacency stores encode_edge(w, other_vertex); fill INF = no edge. Undirected. Self-loops: no matrix entry, line still counts.
 // Requires n <= EDGE_ENCODE_MAX_N and weights <= EDGE_ENCODE_MAX_WEIGHT; encoded value INF (fill) is rejected per edge.
 // Throws std::runtime_error on parse / IO errors.

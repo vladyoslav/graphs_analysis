@@ -1,112 +1,148 @@
-#include <cstdint>
+#include <algorithm>
+#include <filesystem>
 #include <gtest/gtest.h>
-#include <spla.hpp>
+#include <ostream>
+#include <string>
+#include <tuple>
 #include <vector>
+
+#include <spla.hpp>
 
 #include "lib.hpp"
 
-#ifndef TEST_GRAPH_MTX_PATH
-    #error TEST_GRAPH_MTX_PATH must be defined by CMake
-#endif
-
 namespace {
 
-    // True iff mst has n-1 edges, each matches A[u,v] = encode_edge(w,v), every vertex appears, and
-    // MST edges induce a connected graph (hence a spanning tree on n vertices).
-    bool is_spanning_tree_matching_adjacency(const spla::ref_ptr<spla::Matrix>& A,
-                                             const std::vector<MstEdge>&        mst,
-                                             spla::uint                         n) {
-        if (n <= 1) {
-            return mst.empty();
-        }
-        if (mst.size() != static_cast<std::size_t>(n - 1)) {
-            return false;
-        }
+    std::filesystem::path graphs_directory() {
+        // This file: boruvka/boruvka_spla/test/lib_test.cpp → graphs live in boruvka/graphs/
+        return std::filesystem::path(__FILE__).parent_path().parent_path().parent_path() / "graphs";
+    }
 
-        std::vector<unsigned char>           seen_vertex(n, 0);
-        std::vector<std::vector<spla::uint>> adj(n);
+    std::string graph_path(const char* mtx_filename) {
+        return (graphs_directory() / mtx_filename).string();
+    }
 
-        for (const MstEdge& e : mst) {
-            if (e.u >= n || e.v >= n || e.u >= e.v) {
-                return false;
-            }
-            std::uint32_t code = INF;
-            if (A->get_uint(e.u, e.v, code) != spla::Status::Ok || code == INF) {
-                return false;
-            }
-            if (code != encode_edge(e.w, e.v)) {
-                return false;
-            }
-            seen_vertex[e.u] = 1;
-            seen_vertex[e.v] = 1;
-            adj[e.u].push_back(e.v);
-            adj[e.v].push_back(e.u);
-        }
+    auto edge_key(const MstEdge& e) { return std::make_tuple(e.u, e.v, e.w); }
 
-        for (spla::uint i = 0; i < n; ++i) {
-            if (!seen_vertex[i]) {
-                return false;
-            }
-        }
+    void sort_edges(std::vector<MstEdge>& e) {
+        std::sort(e.begin(), e.end(), [](const MstEdge& a, const MstEdge& b) {
+            return edge_key(a) < edge_key(b);
+        });
+    }
 
-        std::vector<unsigned char> vis(n, 0);
-        std::vector<spla::uint>    st;
-        st.push_back(0);
-        vis[0] = 1;
-        while (!st.empty()) {
-            const spla::uint x = st.back();
-            st.pop_back();
-            for (spla::uint y : adj[x]) {
-                if (!vis[y]) {
-                    vis[y] = 1;
-                    st.push_back(y);
-                }
-            }
+    void expect_same_edge_set(std::vector<MstEdge> got, std::vector<MstEdge> want) {
+        sort_edges(got);
+        sort_edges(want);
+        ASSERT_EQ(got.size(), want.size());
+        for (std::size_t i = 0; i < got.size(); ++i) {
+            EXPECT_EQ(got[i].u, want[i].u);
+            EXPECT_EQ(got[i].v, want[i].v);
+            EXPECT_EQ(got[i].w, want[i].w);
         }
-        for (spla::uint i = 0; i < n; ++i) {
-            if (!vis[i]) {
-                return false;
-            }
-        }
-        return true;
     }
 
 }// namespace
 
-TEST(LoadGraph, ReadsTestGraphMtx) {
-    spla::Library* library = spla::Library::get();
-    library->set_platform(0);
-    library->set_device(0);
-    library->set_queues_count(1);
+struct LoadGraphCase {
+    const char* id;
+    const char* mtx_filename;
+    spla::uint  expected_n;
+};
 
-    spla::ref_ptr<spla::Matrix> g = load_graph(TEST_GRAPH_MTX_PATH);
-    ASSERT_TRUE(g);
-    EXPECT_EQ(g->get_n_rows(), 5u);
-    EXPECT_EQ(g->get_n_cols(), 5u);
+struct BoruvkaCase {
+    const char*            id;
+    const char*            mtx_filename;
+    spla::uint             expected_n;
+    std::vector<MstEdge>   expected_mst;
+};
 
-    library->finalize();
+void PrintTo(const LoadGraphCase& c, std::ostream* os) {
+    *os << c.id;
 }
 
-TEST(Boruvka, MstWeightOnTestGraph) {
-    spla::Library* library = spla::Library::get();
-    library->set_platform(0);
-    library->set_device(0);
-    library->set_queues_count(1);
+void PrintTo(const BoruvkaCase& c, std::ostream* os) {
+    *os << c.id;
+}
 
-    spla::ref_ptr<spla::Matrix> g = load_graph(TEST_GRAPH_MTX_PATH);
+class LoadGraphParameterized : public ::testing::TestWithParam<LoadGraphCase> {
+protected:
+    void SetUp() override {
+        spla::Library* lib = spla::Library::get();
+        lib->set_platform(0);
+        lib->set_device(0);
+        lib->set_queues_count(1);
+    }
+
+    void TearDown() override { spla::Library::get()->finalize(); }
+};
+
+class BoruvkaParameterized : public ::testing::TestWithParam<BoruvkaCase> {
+protected:
+    void SetUp() override {
+        spla::Library* lib = spla::Library::get();
+        lib->set_platform(0);
+        lib->set_device(0);
+        lib->set_queues_count(1);
+    }
+
+    void TearDown() override { spla::Library::get()->finalize(); }
+};
+
+// Expected MST/MSF edges (0-based u<v), weights as uint32 after load_graph (see .mtx comments); verified by hand (Kruskal), not by this code.
+INSTANTIATE_TEST_SUITE_P(
+        All,
+        LoadGraphParameterized,
+        ::testing::Values(
+                LoadGraphCase{"test_graph", "test_graph.mtx", 5},
+                LoadGraphCase{"unweighted_path4", "unweighted_path4.mtx", 4},
+                LoadGraphCase{"two_components_path", "two_components_path.mtx", 6}),
+        [](const ::testing::TestParamInfo<LoadGraphCase>& info) {
+            return std::string(info.param.id);
+        });
+
+INSTANTIATE_TEST_SUITE_P(
+        All,
+        BoruvkaParameterized,
+        ::testing::Values(
+                BoruvkaCase{
+                        "test_graph",
+                        "test_graph.mtx",
+                        5,
+                        // Optimum MST weight 12: (1,2,1)(2,3,2)(3,4,5)(4,5,4) in 1-based from test_graph.mtx
+                        {{0, 1, 1}, {1, 2, 2}, {2, 3, 5}, {3, 4, 4}},
+                },
+                BoruvkaCase{
+                        "unweighted_path4",
+                        "unweighted_path4.mtx",
+                        4,
+                        {{0, 1, 1}, {1, 2, 1}, {2, 3, 1}},
+                },
+                BoruvkaCase{
+                        "two_components_path",
+                        "two_components_path.mtx",
+                        6,
+                        {{0, 1, 1}, {1, 2, 1}, {3, 4, 1}, {4, 5, 1}},
+                }),
+        [](const ::testing::TestParamInfo<BoruvkaCase>& info) {
+            return std::string(info.param.id);
+        });
+
+TEST_P(LoadGraphParameterized, ReadsMtxDimensions) {
+    const LoadGraphCase&        p = GetParam();
+    spla::ref_ptr<spla::Matrix> g = load_graph(graph_path(p.mtx_filename));
     ASSERT_TRUE(g);
+    EXPECT_EQ(g->get_n_rows(), p.expected_n);
+    EXPECT_EQ(g->get_n_cols(), p.expected_n);
+}
+
+TEST_P(BoruvkaParameterized, MstEqualsExpected) {
+    const BoruvkaCase&          p = GetParam();
+    spla::ref_ptr<spla::Matrix> g = load_graph(graph_path(p.mtx_filename));
+    ASSERT_TRUE(g);
+    ASSERT_EQ(g->get_n_rows(), p.expected_n);
 
     std::vector<MstEdge> mst = boruvka_mst(g);
-    ASSERT_EQ(mst.size(), 4u);
-    ASSERT_TRUE(is_spanning_tree_matching_adjacency(g, mst, g->get_n_rows()));
-
-    std::uint64_t sum = 0;
     for (const MstEdge& e : mst) {
         EXPECT_LT(e.u, e.v);
-        sum += e.w;
     }
-    // Minimality on this instance: compare to known optimum (see test_graph.mtx comments).
-    EXPECT_EQ(sum, 12u);
-
-    library->finalize();
+    expect_same_edge_set(mst, p.expected_mst);
 }
