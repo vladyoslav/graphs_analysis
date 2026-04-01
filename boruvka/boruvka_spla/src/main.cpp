@@ -84,7 +84,7 @@ auto main(int argc, char* argv[]) -> int {
         ("o,out",     "Output CSV path (benchmark table)", cxxopts::value<std::string>())
         ("n,niters",  "Number of timed benchmark runs", cxxopts::value<int>()->default_value("10"))
         ("w,warmup",  "Warmup runs (not timed)", cxxopts::value<int>()->default_value("3"))
-        ("p,platform","SPLA platform index", cxxopts::value<int>()->default_value("0"))
+        ("p,platform","SPLA platform index", cxxopts::value<int>()->default_value("1"))
         ("d,device",  "SPLA device index", cxxopts::value<int>()->default_value("0"))
         ("h,help",    "Print help");
     // clang-format on

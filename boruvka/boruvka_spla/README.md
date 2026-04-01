@@ -49,7 +49,7 @@ Binary: `build/boruvka_spla`.
 | `--out` | `-o` | Output **CSV** path | required |
 | `--niters` | `-n` | Number of timed runs | `10` |
 | `--warmup` | `-w` | Warmup runs (not timed) | `3` |
-| `--platform` | `-p` | SPLA platform index | `0` |
+| `--platform` | `-p` | SPLA platform index | `1` |
 | `--device` | `-d` | SPLA device index | `0` |
 | `--help` | `-h` | Print help | — |
 
