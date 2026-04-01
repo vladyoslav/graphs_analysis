@@ -98,53 +98,87 @@ object Boruvka {
         } else {
           mstResult = mstResult ++ newEdgesLocal
 
-          // Step 4: rebuild connected components from the real accumulated forest
-          val forestEdges: RDD[Edge[Int]] = sc.parallelize(
-            mstResult.flatMap { e =>
-              List(
-                Edge(e.src, e.dst, 1),
-                Edge(e.dst, e.src, 1)
+          // Step 4: build only the component-merge graph for this iteration
+          val componentMergeEdges: RDD[Edge[Int]] = cheapestPerComponent
+            .values
+            .keyBy { case (srcVertex, _, _) => srcVertex }
+            .join(currentGraph.vertices)
+            .map { case (_, ((_, dstVertex, _), srcComp)) => (dstVertex, srcComp) }
+            .join(currentGraph.vertices)
+            .map { case (_, (srcComp, dstComp)) => (srcComp, dstComp) }
+            .filter { case (srcComp, dstComp) => srcComp != dstComp }
+            .flatMap { case (srcComp, dstComp) =>
+              Seq(
+                Edge(srcComp, dstComp, 1),
+                Edge(dstComp, srcComp, 1)
               )
             }
-          )
-
-          val forestVertices: RDD[(VertexId, Long)] = currentGraph.vertices.mapValues(_ => 0L)
-
-          val updatedComponents: VertexRDD[VertexId] = Graph(forestVertices, forestEdges, 0L)
-            .connectedComponents()
-            .vertices
+            .distinct()
             .cache()
 
-          val prevGraph = currentGraph
+          val hasMerges = componentMergeEdges.take(1).nonEmpty
 
-          // Step 5: update vertex component labels and remove intra-component edges
-          currentGraph = currentGraph
-            .outerJoinVertices(updatedComponents) {
-              case (vid, _, Some(newCompId)) => newCompId
-              case (vid, _, None)            => vid
+          if (!hasMerges) {
+            cheapestPerVertex.unpersist()
+            cheapestPerComponent.unpersist()
+            componentMergeEdges.unpersist()
+
+            if (debug) {
+              val iterTimeMs = (System.nanoTime() - iterStart) / 1e6
+              println(s"[Boruvka] iteration $iterations finished: no component merges, stopping (${ "%.2f".format(iterTimeMs) } ms)")
             }
-            .subgraph(epred = triplet => triplet.srcAttr != triplet.dstAttr)
-            .cache()
 
-          currentGraph.vertices.count()
+            continueLoop = false
+          } else {
+            val mergeVertices: RDD[(VertexId, Long)] = componentMergeEdges
+              .flatMap(e => Seq(e.srcId, e.dstId))
+              .distinct()
+              .map(cid => (cid, cid))
 
-          if (debug) {
-            val currentEdges = currentGraph.edges.count()
-            val iterTimeMs = (System.nanoTime() - iterStart) / 1e6
+            val componentMergeGraph = Graph(mergeVertices, componentMergeEdges, 0L)
 
-            println(
-              s"[Boruvka] iteration $iterations finished: " +
-              s"mst_edges_added=${newEdgesLocal.size}, " +
-              s"mst_edges_total=${mstResult.size}, " +
-              s"remaining_edges=$currentEdges, " +
-              s"time_ms=${"%.2f".format(iterTimeMs)}"
-            )
+            val mergedComponents: VertexRDD[VertexId] = componentMergeGraph
+              .connectedComponents()
+              .vertices
+              .cache()
+
+            val prevGraph = currentGraph
+
+            // Step 5: update each vertex's component label
+            val vertexToNewComponent: RDD[(VertexId, VertexId)] = currentGraph.vertices
+              .map { case (vertexId, oldCompId) => (oldCompId, vertexId) }
+              .join(mergedComponents)
+              .map { case (_, (vertexId, newCompId)) => (vertexId, newCompId) }
+
+            currentGraph = currentGraph
+              .outerJoinVertices(vertexToNewComponent) {
+                case (_, oldCompId, Some(newCompId)) => newCompId
+                case (_, oldCompId, None)            => oldCompId
+              }
+              .subgraph(epred = triplet => triplet.srcAttr != triplet.dstAttr)
+              .cache()
+
+            currentGraph.vertices.count()
+
+            if (debug) {
+              val currentEdges = currentGraph.edges.count()
+              val iterTimeMs = (System.nanoTime() - iterStart) / 1e6
+
+              println(
+                s"[Boruvka] iteration $iterations finished: " +
+                s"mst_edges_added=${newEdgesLocal.size}, " +
+                s"mst_edges_total=${mstResult.size}, " +
+                s"remaining_edges=$currentEdges, " +
+                s"time_ms=${"%.2f".format(iterTimeMs)}"
+              )
+            }
+
+            cheapestPerVertex.unpersist()
+            cheapestPerComponent.unpersist()
+            componentMergeEdges.unpersist()
+            mergedComponents.unpersist()
+            prevGraph.unpersist()
           }
-
-          cheapestPerVertex.unpersist()
-          cheapestPerComponent.unpersist()
-          updatedComponents.unpersist()
-          prevGraph.unpersist()
         }
       }
     }
