@@ -7,6 +7,8 @@ import java.io.{File, PrintWriter}
 
 object Main {
 
+  case class GraphMeta(vertices: Long, edges: Long)
+
   /** Counts connected components in an undirected graph. */
   def countConnectedComponents(graph: Graph[Long, Double]): Long = {
     graph.connectedComponents().vertices.map(_._2).distinct().count()
@@ -40,6 +42,30 @@ object Main {
     result
   }
 
+  def usedHeapMb(): Double = {
+    val rt = Runtime.getRuntime
+    (rt.totalMemory() - rt.freeMemory()) / (1024.0 * 1024.0)
+  }
+
+  def maxHeapMb(): Double = {
+    Runtime.getRuntime.maxMemory() / (1024.0 * 1024.0)
+  }
+
+  def printHeap(label: String, enabled: Boolean): Unit = {
+    if (enabled) {
+      println(f"[MEM] $label: used=${usedHeapMb()}%.2f MB / max=${maxHeapMb()}%.2f MB")
+    }
+  }
+
+  def forceGc(label: String, enabled: Boolean): Unit = {
+    if (enabled) {
+      println(s"[MEM] forcing GC: $label")
+      System.gc()
+      Thread.sleep(2000)
+      printHeap(s"after forced gc - $label", enabled)
+    }
+  }
+
   /**
    * Parses command-line arguments.
    *
@@ -48,6 +74,7 @@ object Main {
    *   --debug
    *   --checks
    *   --profile
+   *   --mem
    */
   private def parseArgs(args: Array[String]): Map[String, String] = {
     args.flatMap { arg =>
@@ -57,6 +84,8 @@ object Main {
         Some("checks" -> "true")
       } else if (arg == "--profile") {
         Some("profile" -> "true")
+      } else if (arg == "--mem") {
+        Some("mem" -> "true")
       } else if (arg.startsWith("--") && arg.contains("=")) {
         val parts = arg.drop(2).split("=", 2)
         Some(parts(0) -> parts(1))
@@ -66,12 +95,38 @@ object Main {
     }.toMap
   }
 
+  /** Reads graph metadata from Matrix Market header/size line. */
+  private def readMtxMeta(sc: SparkContext, path: String): GraphMeta = {
+    val headLines = sc.textFile(path).take(200)
+
+    def isIntegerToken(s: String): Boolean = s.forall(_.isDigit)
+
+    val metaLineOpt = headLines.iterator
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .map { line =>
+        if (line.startsWith("%")) line.drop(1).trim else line
+      }
+      .filter(_.nonEmpty)
+      .find { line =>
+        val parts = line.split("\\s+")
+        parts.length == 3 && parts.forall(isIntegerToken)
+      }
+
+    val metaLine = metaLineOpt.getOrElse {
+      throw new IllegalArgumentException(s"Could not find Matrix Market size line in $path")
+    }
+
+    val parts = metaLine.split("\\s+")
+    GraphMeta(vertices = parts(0).toLong, edges = parts(2).toLong)
+  }
+
   def main(args: Array[String]): Unit = {
     val params = parseArgs(args)
 
     val inputPath = params.getOrElse("graph", {
       System.err.println("Error: --graph is required.")
-      System.err.println("Usage: BoruvkaMST --graph=<path> [--csv=<path>] [--runs=<n>] [--warmup=<n>] [--cores=<n>] [--debug] [--checks] [--profile]")
+      System.err.println("Usage: BoruvkaMST --graph=<path> [--csv=<path>] [--runs=<n>] [--warmup=<n>] [--cores=<n>] [--debug] [--checks] [--profile] [--mem]")
       System.err.println("  --graph    path to .mtx file (required)")
       System.err.println("  --csv      path to save CSV results (optional)")
       System.err.println("  --runs     number of benchmark runs (default: 5)")
@@ -80,6 +135,7 @@ object Main {
       System.err.println("  --debug    enable per-iteration debug log (optional flag)")
       System.err.println("  --checks   enable final correctness checks (optional flag)")
       System.err.println("  --profile  enable per-step profiling inside Boruvka (optional flag)")
+      System.err.println("  --mem      enable memory profiling (optional flag)")
       System.exit(1)
       ""
     })
@@ -147,6 +203,7 @@ object Main {
     val debug = params.get("debug").contains("true")
     val checks = params.get("checks").contains("true")
     val profile = params.get("profile").contains("true")
+    val mem = params.get("mem").contains("true")
 
     val conf = new SparkConf()
       .setAppName("BoruvkaMST")
@@ -158,38 +215,40 @@ object Main {
 
     val sc = new SparkContext(conf)
     sc.setLogLevel("ERROR")
-    sc.setCheckpointDir("/tmp/spark-checkpoints")
 
     val actualCores = sc.defaultParallelism
-
     var graph: Graph[Long, Double] = null
 
     try {
+      printHeap("before load graph", mem)
+
+      val meta = timed("read graph metadata") {
+        readMtxMeta(sc, inputPath)
+      }
+
       graph = timed("load graph") {
         val g = loadMtxGraph(sc, inputPath)
         g.cache()
         g
       }
 
-      val numVertices = timed("count vertices") {
-        graph.vertices.count()
-      }
-
-      val numEdges = timed("count edges") {
-        graph.edges.count()
-      }
+      printHeap("after load graph", mem)
 
       val inputComponents =
         if (checks) {
-          timed("count input components") {
+          val c = timed("count input components") {
             countConnectedComponents(graph)
           }
+          printHeap("after count input components", mem)
+          c
         } else {
           -1L
         }
 
+      forceGc("post input stats", mem)
+
       val expectedResultEdges =
-        if (checks) numVertices - inputComponents
+        if (checks) meta.vertices - inputComponents
         else -1L
 
       val graphName = inputFile.getName
@@ -197,8 +256,8 @@ object Main {
       println()
       println("=== INPUT ===")
       println(s"graph:              $graphName")
-      println(s"vertices:           $numVertices")
-      println(s"edges:              $numEdges")
+      println(s"vertices:           ${meta.vertices}")
+      println(s"edges:              ${meta.edges}")
       if (checks) {
         println(s"components:         $inputComponents")
         println(s"expected_mst_edges: $expectedResultEdges")
@@ -212,10 +271,11 @@ object Main {
       println(s"debug:              $debug")
       println(s"checks:             $checks")
       println(s"profile:            $profile")
+      println(s"mem:                $mem")
 
       for (i <- 0 until numWarmup) {
         val warmup = timed(s"warmup ${i + 1}/$numWarmup") {
-          Boruvka.run(graph, sc, debug, profile)
+          Boruvka.run(graph, sc, debug, profile, mem)
         }
         println(s"Warmup ${i + 1}/$numWarmup done. weight=${warmup.weight}, edges=${warmup.edges.size}, iterations=${warmup.iterations}")
       }
@@ -226,15 +286,19 @@ object Main {
 
       for (i <- 0 until numRuns) {
         System.gc()
+        printHeap(s"before run ${i + 1}", mem)
+
         val startTime = System.nanoTime()
-        lastResult = Boruvka.run(graph, sc, debug, profile)
+        lastResult = Boruvka.run(graph, sc, debug, profile, mem)
         val endTime = System.nanoTime()
         val timeMs = (endTime - startTime) / 1e6
+
+        printHeap(s"after run ${i + 1}", mem)
 
         println(s"Run ${i + 1}/$numRuns: ${"%.2f".format(timeMs)} ms")
 
         val row =
-          s"spark,$graphName,$numVertices,$numEdges,$actualCores," +
+          s"spark,$graphName,${meta.vertices},${meta.edges},$actualCores," +
             s"${lastResult.weight},${lastResult.edges.size},${"%.2f".format(timeMs)}"
 
         csvRows += row
@@ -252,13 +316,13 @@ object Main {
           (components, covered)
         }
 
-        val vertexCountCorrect = coveredVertices == numVertices
+        val vertexCountCorrect = coveredVertices == meta.vertices
         val componentCountCorrect = resultComponents == inputComponents
         val edgeCountCorrect = lastResult.edges.size == expectedResultEdges
 
         println()
         println("=== RESULT CHECK ===")
-        println(s"input_vertices:          $numVertices")
+        println(s"input_vertices:          ${meta.vertices}")
         println(s"result_vertices_covered: $coveredVertices")
         println(s"vertex_count_correct:    $vertexCountCorrect")
         println(s"input_components:        $inputComponents")
@@ -272,8 +336,8 @@ object Main {
       println()
       println("=== RESULTS ===")
       println(s"graph:       $graphName")
-      println(s"vertices:    $numVertices")
-      println(s"edges:       $numEdges")
+      println(s"vertices:    ${meta.vertices}")
+      println(s"edges:       ${meta.edges}")
       println(s"cores:       $actualCores")
       println(s"mst_weight:  ${lastResult.weight}")
       println(s"mst_edges:   ${lastResult.edges.size}")
@@ -285,24 +349,23 @@ object Main {
       csvRows.foreach(println)
 
       csvOutputPath.foreach { path =>
-        timed("write csv") {
-          val file = new File(path)
-          val fileExists = file.exists()
-          val writer = new PrintWriter(new java.io.FileWriter(file, true))
-          try {
-            if (!fileExists) writer.println(csvHeader)
-            csvRows.foreach(writer.println)
-          } finally {
-            writer.close()
-          }
-          println(s"\nCSV appended to: $path")
+        val file = new File(path)
+        val fileExists = file.exists()
+        val writer = new PrintWriter(new java.io.FileWriter(file, true))
+        try {
+          if (!fileExists) writer.println(csvHeader)
+          csvRows.foreach(writer.println)
+        } finally {
+          writer.close()
         }
+        println(s"\nCSV appended to: $path")
       }
 
     } finally {
       if (graph != null) {
         graph.unpersist(false)
       }
+      printHeap("before spark stop", mem)
       timed("spark stop") {
         sc.stop()
       }
@@ -338,11 +401,17 @@ object Main {
             if (hasWeights && p.length >= 3) p(2).toDouble
             else math.min(src, dst).toDouble
 
-          if (isSymmetric) Iterator(Edge(src, dst, w), Edge(dst, src, w))
-          else Iterator(Edge(src, dst, w))
+          if (isSymmetric) {
+            val (u, v) =
+              if (src < dst) (src, dst)
+              else (dst, src)
+            Iterator.single(Edge(u, v, w))
+          } else {
+            Iterator.single(Edge(src, dst, w))
+          }
         }
       }
-    }
+    }.distinct()
 
     Graph.fromEdges(edges, 0L)
   }
