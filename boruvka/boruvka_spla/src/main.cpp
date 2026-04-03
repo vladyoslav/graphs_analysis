@@ -54,13 +54,13 @@ namespace {
         return vals_view->get_size() / sizeof(std::uint32_t);
     }
 
-    void write_result_csv(const fs::path&                 out_path,
-                          const std::string&              graph_label,
-                          spla::uint                      n,
-                          std::size_t                     directed_edges,
-                          std::uint64_t                   mst_weight,
-                          std::size_t                     mst_edges,
-                          const std::vector<double>&      times_ms) {
+    void write_result_csv(const fs::path&            out_path,
+                          const std::string&         graph_label,
+                          spla::uint                 n,
+                          std::size_t                directed_edges,
+                          std::uint64_t              mst_weight,
+                          std::size_t                mst_edges,
+                          const std::vector<double>& times_ms) {
         std::ofstream out(out_path);
         if (!out) {
             throw std::runtime_error("cannot open output file: " + out_path.string());
@@ -84,7 +84,7 @@ auto main(int argc, char* argv[]) -> int {
         ("o,out",     "Output CSV path (benchmark table)", cxxopts::value<std::string>())
         ("n,niters",  "Number of timed benchmark runs", cxxopts::value<int>()->default_value("10"))
         ("w,warmup",  "Warmup runs (not timed)", cxxopts::value<int>()->default_value("3"))
-        ("p,platform","SPLA platform index", cxxopts::value<int>()->default_value("1"))
+        ("p,platform","SPLA platform index", cxxopts::value<int>()->default_value("0"))
         ("d,device",  "SPLA device index", cxxopts::value<int>()->default_value("0"))
         ("h,help",    "Print help");
     // clang-format on
