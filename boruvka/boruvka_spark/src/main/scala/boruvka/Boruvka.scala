@@ -3,6 +3,7 @@ package boruvka
 import org.apache.spark.SparkContext
 import org.apache.spark.graphx._
 import org.apache.spark.rdd.RDD
+import org.apache.spark.util.SizeEstimator
 
 import scala.collection.mutable
 
@@ -67,6 +68,25 @@ object Boruvka {
     }
   }
 
+  private def usedHeapMb(): Double = {
+    val rt = Runtime.getRuntime
+    (rt.totalMemory() - rt.freeMemory()) / (1024.0 * 1024.0)
+  }
+
+  private def printMem(label: String, enabled: Boolean): Unit = {
+    if (enabled) {
+      println(f"[MEM] $label: used=${usedHeapMb()}%.2f MB")
+    }
+  }
+
+  private def printEstimatedSize(label: String, obj: AnyRef, enabled: Boolean): Unit = {
+    if (enabled) {
+      val bytes = SizeEstimator.estimate(obj)
+      val mb = bytes / 1024.0 / 1024.0
+      println(f"[MEM] $label: estimated_size=${mb}%.2f MB")
+    }
+  }
+
   /**
    * Runs Boruvka's algorithm using GraphX/Spark primitives.
    */
@@ -74,11 +94,13 @@ object Boruvka {
     graph: Graph[Long, Double],
     sc: SparkContext,
     debug: Boolean = false,
-    profile: Boolean = false
+    profile: Boolean = false,
+    mem: Boolean = false
   ): BoruvkaResult = {
     var currentGraph = graph.mapVertices((vid, _) => vid)
     currentGraph.cache()
     currentGraph.vertices.count()
+    printMem("after initial graph materialization", mem)
 
     var mstResult = List.empty[MstEdge]
     var continueLoop = true
@@ -109,6 +131,7 @@ object Boruvka {
       val hasCheapest = timedStep(profile, s"iter $iterations - check cheapest non-empty") {
         cheapestPerVertex.take(1).nonEmpty
       }
+      printMem(s"iter $iterations - after cheapestPerVertex materialization", mem)
 
       if (!hasCheapest) {
         cheapestPerVertex.unpersist()
@@ -133,10 +156,14 @@ object Boruvka {
         val componentMap = timedStep(profile, s"iter $iterations - collect component map") {
           currentGraph.vertices.collectAsMap()
         }
+        printMem(s"iter $iterations - after componentMap collect", mem)
+        printEstimatedSize(s"iter $iterations - componentMap", componentMap.asInstanceOf[AnyRef], mem)
 
         val selectedEdges = timedStep(profile, s"iter $iterations - collect selected edges") {
           cheapestPerComponent.values.collect().toList
         }
+        printMem(s"iter $iterations - after selectedEdges collect", mem)
+        printEstimatedSize(s"iter $iterations - selectedEdges", selectedEdges.asInstanceOf[AnyRef], mem)
 
         val candidateEdgesLocal = timedStep(profile, s"iter $iterations - build candidate edges locally") {
           selectedEdges
@@ -161,6 +188,7 @@ object Boruvka {
             }
             .distinct
         }
+        printEstimatedSize(s"iter $iterations - candidateEdgesLocal", candidateEdgesLocal.asInstanceOf[AnyRef], mem)
 
         if (debug) {
           println(s"[Boruvka] iteration $iterations: candidate edges = ${candidateEdgesLocal.size}")
@@ -183,6 +211,7 @@ object Boruvka {
               .sortBy(e => (e.weight, e.src, e.dst))
               .filter(e => uf.union(e.srcComp, e.dstComp))
           }
+          printEstimatedSize(s"iter $iterations - acceptedCandidates", acceptedCandidates.asInstanceOf[AnyRef], mem)
 
           val acceptedEdgesLocal = acceptedCandidates.map(e => MstEdge(e.src, e.dst, e.weight))
 
@@ -202,6 +231,7 @@ object Boruvka {
             continueLoop = false
           } else {
             mstResult = mstResult ++ acceptedEdgesLocal
+            printEstimatedSize(s"iter $iterations - mstResult", mstResult.asInstanceOf[AnyRef], mem)
 
             val hasMerges = acceptedCandidates.nonEmpty
 
@@ -249,6 +279,7 @@ object Boruvka {
               timedStep(profile, s"iter $iterations - materialize updated graph") {
                 currentGraph.vertices.count()
               }
+              printMem(s"iter $iterations - after updated graph materialization", mem)
 
               if (debug || profile) {
                 val currentEdges = timedStep(profile, s"iter $iterations - count remaining edges") {
@@ -259,10 +290,10 @@ object Boruvka {
 
                 println(
                   s"[Boruvka] iteration $iterations finished: " +
-                  s"mst_edges_added=${acceptedEdgesLocal.size}, " +
-                  s"mst_edges_total=${mstResult.size}, " +
-                  s"remaining_edges=$currentEdges, " +
-                  s"time_ms=${"%.2f".format(iterTimeMs)}"
+                    s"mst_edges_added=${acceptedEdgesLocal.size}, " +
+                    s"mst_edges_total=${mstResult.size}, " +
+                    s"remaining_edges=$currentEdges, " +
+                    s"time_ms=${"%.2f".format(iterTimeMs)}"
                 )
               }
 
