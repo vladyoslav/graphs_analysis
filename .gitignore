@@ -19,7 +19,7 @@ compile_commands.json
 *~
 
 # Experiment results (generated)
-results/
+# results/
 
 # Ignore all files in graphs/ except for a few specific .mtx files
 graphs/
