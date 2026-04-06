@@ -84,8 +84,9 @@ auto main(int argc, char* argv[]) -> int {
         ("o,out",     "Output CSV path (benchmark table)", cxxopts::value<std::string>())
         ("n,niters",  "Number of timed benchmark runs", cxxopts::value<int>()->default_value("10"))
         ("w,warmup",  "Warmup runs (not timed)", cxxopts::value<int>()->default_value("3"))
-        ("p,platform","SPLA platform index", cxxopts::value<int>()->default_value("0"))
-        ("d,device",  "SPLA device index", cxxopts::value<int>()->default_value("0"))
+        ("c,cpu-only","set_accelerator(None), set_force_no_acceleration(true), CpuCsr", cxxopts::value<bool>()->implicit_value("true")->default_value("false"))
+        ("p,platform","SPLA platform index (ignored with --cpu-only)", cxxopts::value<int>()->default_value("0"))
+        ("d,device",  "SPLA device index (ignored with --cpu-only)", cxxopts::value<int>()->default_value("0"))
         ("h,help",    "Print help");
     // clang-format on
 
@@ -115,6 +116,7 @@ auto main(int argc, char* argv[]) -> int {
     const int         warmup   = parsed["warmup"].as<int>();
     const int         platform = parsed["platform"].as<int>();
     const int         device   = parsed["device"].as<int>();
+    const bool        cpu_only = parsed["cpu-only"].as<bool>();
 
     if (niters < 1) {
         std::cerr << "niters must be >= 1\n";
@@ -127,14 +129,36 @@ auto main(int argc, char* argv[]) -> int {
 
     std::string    acc_info;
     spla::Library* library = spla::Library::get();
-    library->set_platform(platform);
-    library->set_device(device);
-    library->set_queues_count(1);
+    const spla::FormatMatrix graph_format =
+            cpu_only ? spla::FormatMatrix::CpuCsr : spla::FormatMatrix::AccCsr;
+
+    if (cpu_only) {
+        if (library->set_accelerator(spla::AcceleratorType::None) != spla::Status::Ok) {
+            std::cerr << "set_accelerator(None) failed\n";
+            return 1;
+        }
+        if (library->set_force_no_acceleration(true) != spla::Status::Ok) {
+            std::cerr << "set_force_no_acceleration(true) failed\n";
+            return 1;
+        }
+    } else {
+        if (library->set_force_no_acceleration(false) != spla::Status::Ok) {
+            std::cerr << "set_force_no_acceleration(false) failed\n";
+            return 1;
+        }
+        (void) library->set_platform(platform);
+        (void) library->set_device(device);
+        (void) library->set_queues_count(1);
+    }
     library->get_accelerator_info(acc_info);
-    std::cout << "env: " << acc_info << std::endl;
+    std::cout << "env: " << acc_info;
+    if (cpu_only) {
+        std::cout << " (accelerator disabled, force_no_acceleration, CpuCsr)";
+    }
+    std::cout << std::endl;
 
     try {
-        spla::ref_ptr<spla::Matrix> graph = load_graph(mtxpath);
+        spla::ref_ptr<spla::Matrix> graph = load_graph(mtxpath, graph_format);
         if (!graph) {
             std::cerr << "load_graph returned null\n";
             library->finalize();
@@ -144,12 +168,12 @@ auto main(int argc, char* argv[]) -> int {
         const spla::uint  n              = graph->get_n_rows();
         const std::size_t directed_edges = directed_edge_count(graph);
 
-        std::vector<MstEdge> ref_mst = boruvka_mst(graph);
+        std::vector<MstEdge> ref_mst = boruvka_mst(graph, graph_format);
         const std::uint64_t  w_sum   = mst_total_weight(ref_mst);
         const std::size_t    m_edges = ref_mst.size();
 
         for (int i = 0; i < warmup; ++i) {
-            (void) boruvka_mst(graph);
+            (void) boruvka_mst(graph, graph_format);
         }
 
         std::vector<double> times_ms;
@@ -158,7 +182,7 @@ auto main(int argc, char* argv[]) -> int {
         spla::Timer timer;
         for (int i = 0; i < niters; ++i) {
             timer.start();
-            (void) boruvka_mst(graph);
+            (void) boruvka_mst(graph, graph_format);
             timer.stop();
             times_ms.push_back(timer.get_elapsed_ms());
         }

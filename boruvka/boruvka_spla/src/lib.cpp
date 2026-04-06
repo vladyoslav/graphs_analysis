@@ -79,7 +79,7 @@ namespace {
 
 // --- Matrix Market loader: undirected UINT adjacency with packed (weight, neighbor) per entry. ---
 
-spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path) {
+spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path, spla::FormatMatrix storage_format) {
     std::ifstream in(mtx_path);
     if (!in.is_open()) {
         throw std::runtime_error("mtx: cannot open " + mtx_path);
@@ -102,7 +102,7 @@ spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path) {
     if (!A) {
         throw std::runtime_error("mtx: failed to allocate adjacency matrix");
     }
-    A->set_format(spla::FormatMatrix::AccCsr);
+    A->set_format(storage_format);
     if (A->set_fill_value(spla::Scalar::make_uint(INF)) != spla::Status::Ok) {
         throw std::runtime_error("mtx: set_fill_value failed");
     }
@@ -150,7 +150,7 @@ spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path) {
     return A;
 }
 
-std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A) {
+std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::FormatMatrix working_format) {
     const spla::uint    n         = A->get_n_rows();
     const std::uint32_t enc_shift = edge_encode_shift_for_n(n);
     std::vector<MstEdge> result;
@@ -164,12 +164,12 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A) {
     // Graph S ⊆ A: only edges whose endpoints lie in different DSU components (rebuilt after merges).
     // Initialized as element-wise copy of A via e-wise add with FIRST (same weights).
     spla::ref_ptr<spla::Matrix> S = spla::Matrix::make(n, n, spla::UINT);
-    S->set_format(spla::FormatMatrix::AccCsr);
+    S->set_format(working_format);
     (void) S->set_fill_value(inf);
     (void) spla::exec_m_eadd(S, A, A, spla::FIRST_UINT, desc);
 
     spla::ref_ptr<spla::Matrix> S_new = spla::Matrix::make(n, n, spla::UINT);
-    S_new->set_format(spla::FormatMatrix::AccCsr);
+    S_new->set_format(working_format);
     (void) S_new->set_fill_value(inf);
 
     Dsu dsu(n);

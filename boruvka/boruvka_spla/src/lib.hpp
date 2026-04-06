@@ -49,10 +49,14 @@ inline void decode_edge(std::uint32_t code, std::uint32_t& weight, spla::uint& n
 // Requires n such that edge_encode_shift_for_n(n) <= 31 (roughly n <= 2^31), and weights <= edge_max_weight_for_shift(edge_encode_shift_for_n(n)).
 // encoded value INF (fill) is rejected per edge.
 // Throws std::runtime_error on parse / IO errors.
-spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path);
+// storage_format: AccCsr for OpenCL-capable runs; CpuCsr when acceleration is disabled (see main --cpu-only).
+spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path,
+                                        spla::FormatMatrix      storage_format = spla::FormatMatrix::AccCsr);
 
 // CPU classic Borůvka on COO (same packing as load_graph: shift from A->get_n_rows()).
 std::vector<MstEdge> boruvka_mst_classic(const spla::ref_ptr<spla::Matrix>& A);
 
 // SPLA-accelerated Borůvka (same semantics as classic).
-std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A);
+// working_format: same family as A (typically AccCsr or CpuCsr from load_graph).
+std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A,
+                                 spla::FormatMatrix                working_format = spla::FormatMatrix::AccCsr);
