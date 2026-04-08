@@ -31,10 +31,15 @@ graphs_analysis/
 
 ## Experiments
 
-The study compares runtime and behavior of the two Borůvka implementations on public **SuiteSparse Matrix Collection** graphs (see the notebook for the exact matrix list and download URLs).
+Benchmarks use public **SuiteSparse Matrix Collection** graphs (see the notebook for the exact matrix list and download URLs). Two experiment lines:
+
+1. **Cross-implementation speed** — compare **SPLA** vs **Spark GraphX** on graphs of **different sizes** (vertex/edge counts), using repeated timed runs and CSV exports so results are comparable across backends.
+2. **Spark scaling** — compare the **Spark** implementation with **different numbers of CPU cores** (`--cores` / local Spark parallelism) on the same graphs to see how wall-clock time changes with core count.
+
+Artifacts:
 
 - **`experiments/experiment.ipynb`** — fetch `.mtx` files into `boruvka/graphs`, graph statistics / preprocessing notes, and commands to run `boruvka_spla` and `boruvka_spark` benchmarks.
-- **`experiments/results/`** — collected CSV results (naming reflects backend and graph, e.g. `spla-*`, `spark-*`).
+- **`experiments/results/`** — collected CSV results (naming reflects backend, graph, and sometimes device or core setting, e.g. `spla-*`, `spark-*`).
 - **`slides/`** — slides (`boruvka_presentation_*.md` / `.pdf`) describing SPLA, Spark, and the algorithm.
 
 ## Building and running
