@@ -1,0 +1,6 @@
+library,graph,vertices,edges,cores,mst_weight,mst_edges,time_ms
+spark,road-roadNet-PA.mtx,1087562,1541514,1,1.04249683E9,1087561,61872.34
+spark,road-roadNet-PA.mtx,1087562,1541514,1,1.04249683E9,1087561,62397.60
+spark,road-roadNet-PA.mtx,1087562,1541514,1,1.04249683E9,1087561,61939.61
+spark,road-roadNet-PA.mtx,1087562,1541514,1,1.04249683E9,1087561,62858.28
+spark,road-roadNet-PA.mtx,1087562,1541514,1,1.04249683E9,1087561,63123.78

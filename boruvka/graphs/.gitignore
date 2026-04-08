@@ -1,3 +1,4 @@
 *.mtx
+*.bak
 
 !test_graph.mtx

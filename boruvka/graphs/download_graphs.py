@@ -6,6 +6,69 @@ import argparse
 import yaml
 
 
+def preview_mtx(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = []
+            for _ in range(5):
+                line = f.readline()
+                if not line:
+                    break
+                lines.append(line.strip())
+        print("    preview:")
+        for line in lines:
+            print(f"      {line}")
+    except Exception as e:
+        print(f"    [WARN] Could not preview file: {e}")
+
+
+def convert_edges_to_mtx(edges_path, mtx_path):
+    """
+    Convert edge list file to MatrixMarket symmetric pattern format.
+    Assumes each non-comment line contains at least two integers: u v
+    """
+    edges = []
+    max_node = 0
+    min_node = None
+
+    with open(edges_path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("%") or line.startswith("#"):
+                continue
+
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+
+            try:
+                u = int(parts[0])
+                v = int(parts[1])
+            except ValueError:
+                continue
+
+            edges.append((u, v))
+            max_node = max(max_node, u, v)
+            if min_node is None:
+                min_node = min(u, v)
+            else:
+                min_node = min(min_node, u, v)
+
+    if not edges:
+        raise RuntimeError(f"No valid edges found in {edges_path}")
+
+    # If vertices are 0-based, shift to 1-based for MatrixMarket
+    shift = 1 if min_node == 0 else 0
+
+    with open(mtx_path, "w", encoding="utf-8") as out:
+        out.write("%%MatrixMarket matrix coordinate pattern symmetric\n")
+        out.write(f"{max_node + shift} {max_node + shift} {len(edges)}\n")
+        for u, v in edges:
+            out.write(f"{u + shift} {v + shift}\n")
+
+
 def download_graph(name, url, graphs_dir):
     """Downloads and extracts a single graph. Returns True on success."""
     final_path = os.path.join(graphs_dir, f"{name}.mtx")
@@ -22,32 +85,50 @@ def download_graph(name, url, graphs_dir):
         # Download zip archive
         urllib.request.urlretrieve(url, zip_path)
 
-        # Extract only the .mtx file, ignore everything else (e.g., readme.html)
+        # Extract .mtx if available, otherwise .edges
         with zipfile.ZipFile(zip_path, "r") as zf:
-            target_files = [f for f in zf.namelist() if f.endswith(".mtx")]
+            names = zf.namelist()
 
-            if not target_files:
-                print(f"  [ERROR] No .mtx file found in archive for {name}")
+            mtx_files = [f for f in names if f.lower().endswith(".mtx")]
+            edges_files = [f for f in names if f.lower().endswith(".edges")]
+
+            if mtx_files:
+                extracted_file = mtx_files[0]
+                zf.extract(extracted_file, graphs_dir)
+
+                extracted_path = os.path.join(graphs_dir, extracted_file)
+                os.makedirs(os.path.dirname(extracted_path), exist_ok=True)
+
+                if extracted_path != final_path:
+                    if os.path.exists(final_path):
+                        os.remove(final_path)
+                    os.replace(extracted_path, final_path)
+
+            elif edges_files:
+                extracted_file = edges_files[0]
+                zf.extract(extracted_file, graphs_dir)
+
+                extracted_path = os.path.join(graphs_dir, extracted_file)
+
+                # Convert .edges -> .mtx
+                convert_edges_to_mtx(extracted_path, final_path)
+
+                # Remove extracted .edges file after conversion
+                if os.path.exists(extracted_path):
+                    os.remove(extracted_path)
+
+            else:
+                print(f"  [ERROR] No .mtx or .edges file found in archive for {name}")
                 return False
 
-            extracted_file = target_files[0]
-            zf.extract(extracted_file, graphs_dir)
-
-            # Standardize filename to {name}.mtx regardless of original archive contents
-            extracted_path = os.path.join(graphs_dir, extracted_file)
-            if extracted_path != final_path:
-                if os.path.exists(final_path):
-                    os.remove(final_path)
-                os.rename(extracted_path, final_path)
-
-        # Clean up the zip file
+        # Clean up zip
         os.remove(zip_path)
         print(f"  [OK] {name}.mtx")
+        preview_mtx(final_path)
         return True
 
     except Exception as e:
         print(f"  [ERROR] {name}: {e}")
-        # Clean up partial or broken downloads
         if os.path.exists(zip_path):
             os.remove(zip_path)
         return False

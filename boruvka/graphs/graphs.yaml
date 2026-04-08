@@ -1,14 +1,14 @@
 # Road Networks
-chesapeake: "https://nrvis.com/download/data/road/road-chesapeake.zip"
-minnesota: "https://nrvis.com/download/data/road/road-minnesota.zip"
-usroads-48: "https://nrvis.com/download/data/road/road-usroads.zip"
+road-luxembourg-osm: "https://nrvis.com/download/data/road/road-luxembourg-osm.zip"
+road-usroads-48: "https://nrvis.com/download/data/road/road-usroads-48.zip"
+road-roadNet-PA: "https://nrvis.com/download/data/road/road-roadNet-PA.zip"
 
-# Triangulations
-delaunay_n10: "https://nrvis.com/download/data/dimacs10/delaunay_n10.zip"
-delaunay_n13: "https://nrvis.com/download/data/dimacs10/delaunay_n13.zip"
-delaunay_n15: "https://nrvis.com/download/data/dimacs10/delaunay_n15.zip"
+# Triangulations / Geometric
+delaunay_n17: "https://nrvis.com/download/data/dimacs10/delaunay_n17.zip"
+delaunay_n18: "https://nrvis.com/download/data/dimacs10/delaunay_n18.zip"
+delaunay_n20: "https://nrvis.com/download/data/dimacs10/delaunay_n20.zip"
 
-# Social Networks
-ca-GrQc: "https://nrvis.com/download/data/ca/ca-GrQc.zip"
-ca-HepTh: "https://nrvis.com/download/data/ca/ca-HepTh.zip"
-email-Enron: "https://nrvis.com/download/data/email/email-enron-large.zip"
+# Social / Collaboration
+soc-LiveMocha: "https://nrvis.com/download/data/soc/soc-LiveMocha.zip"
+ca-MathSciNet: "https://nrvis.com/download/data/ca/ca-MathSciNet.zip"
+soc-lastfm: "https://nrvis.com/download/data/soc/soc-lastfm.zip"
