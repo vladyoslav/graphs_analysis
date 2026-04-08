@@ -1,0 +1,14 @@
+# Road Networks
+chesapeake: "https://nrvis.com/download/data/road/road-chesapeake.zip"
+minnesota: "https://nrvis.com/download/data/road/road-minnesota.zip"
+usroads-48: "https://nrvis.com/download/data/road/road-usroads.zip"
+
+# Triangulations
+delaunay_n10: "https://nrvis.com/download/data/dimacs10/delaunay_n10.zip"
+delaunay_n13: "https://nrvis.com/download/data/dimacs10/delaunay_n13.zip"
+delaunay_n15: "https://nrvis.com/download/data/dimacs10/delaunay_n15.zip"
+
+# Social Networks
+ca-GrQc: "https://nrvis.com/download/data/ca/ca-GrQc.zip"
+ca-HepTh: "https://nrvis.com/download/data/ca/ca-HepTh.zip"
+email-Enron: "https://nrvis.com/download/data/email/email-enron-large.zip"

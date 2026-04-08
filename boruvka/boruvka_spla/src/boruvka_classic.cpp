@@ -64,7 +64,8 @@ namespace {
 }// namespace
 
 std::vector<MstEdge> boruvka_mst_classic(const spla::ref_ptr<spla::Matrix>& A) {
-    const spla::uint     n = A->get_n_rows();
+    const spla::uint     n         = A->get_n_rows();
+    const std::uint32_t  enc_shift = edge_encode_shift_for_n(n);
     std::vector<MstEdge> result;
     if (n <= 1) {
         return result;
@@ -97,7 +98,7 @@ std::vector<MstEdge> boruvka_mst_classic(const spla::ref_ptr<spla::Matrix>& A) {
 
             std::uint32_t w  = 0;
             spla::uint    nb = 0;
-            decode_edge(vals[k], w, nb);
+            decode_edge(vals[k], w, nb, enc_shift);
             if (w == INF || nb != v) {
                 continue;
             }

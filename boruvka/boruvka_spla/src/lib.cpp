@@ -79,7 +79,7 @@ namespace {
 
 // --- Matrix Market loader: undirected UINT adjacency with packed (weight, neighbor) per entry. ---
 
-spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path) {
+spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path, spla::FormatMatrix storage_format) {
     std::ifstream in(mtx_path);
     if (!in.is_open()) {
         throw std::runtime_error("mtx: cannot open " + mtx_path);
@@ -90,22 +90,24 @@ spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path) {
     // Phase: parse dimensions (n, nnz) from the first non-comment line.
     parse_size_line(read_first_data_line(in), n, nnz);
 
-    if (n > EDGE_ENCODE_MAX_N) {
-        throw std::runtime_error("mtx: n must be <= 2^EDGE_ENCODE_SHIFT (" +
-                                 std::to_string(EDGE_ENCODE_MAX_N) + ")");
+    const std::uint32_t shift = edge_encode_shift_for_n(n);
+    if (shift > 31u) {
+        throw std::runtime_error("mtx: n too large for 32-bit packed (weight, neighbor) encoding (n=" +
+                                 std::to_string(n) + ")");
     }
+    const std::uint32_t max_w = edge_max_weight_for_shift(shift);
 
     // Phase: allocate n×n UINT matrix; absent edges use INF (must not collide with encode_edge).
     spla::ref_ptr<spla::Matrix> A = spla::Matrix::make(n, n, spla::UINT);
     if (!A) {
         throw std::runtime_error("mtx: failed to allocate adjacency matrix");
     }
-    A->set_format(spla::FormatMatrix::AccCsr);
+    A->set_format(storage_format);
     if (A->set_fill_value(spla::Scalar::make_uint(INF)) != spla::Status::Ok) {
         throw std::runtime_error("mtx: set_fill_value failed");
     }
 
-    // Phase: read nnz lines "u v w" (1-based); store undirected encoded edges (u,v) and (v,u).
+    // Phase: read nnz lines "u v [w]" (1-based); missing w defaults to 1; store undirected encoded edges (u,v) and (v,u).
     std::string line;
     for (std::size_t i = 0; i < nnz; ++i) {
         if (!std::getline(in, line)) {
@@ -115,10 +117,13 @@ spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path) {
 
         spla::uint         u = 0;
         spla::uint         v = 0;
-        std::uint32_t      w = 0;
+        std::uint32_t      w = 1;
         std::istringstream body(line);
-        if (!(body >> u >> v >> w)) {
-            throw std::runtime_error("mtx: edge line must have u v w: " + line);
+        if (!(body >> u >> v)) {
+            throw std::runtime_error("mtx: edge line must have u v [w]: " + line);
+        }
+        if (!(body >> w)) {
+            w = 1;
         }
 
         if (u == 0 || v == 0 || u > n || v > n) {
@@ -128,12 +133,12 @@ spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path) {
         v -= 1;
 
         if (u != v) {
-            if (w > EDGE_ENCODE_MAX_WEIGHT) {
-                throw std::runtime_error("mtx: weight too large for (32 - EDGE_ENCODE_SHIFT) high bits (max " +
-                                         std::to_string(EDGE_ENCODE_MAX_WEIGHT) + "): " + line);
+            if (w > max_w) {
+                throw std::runtime_error("mtx: weight too large for encode shift " + std::to_string(shift) +
+                                         " (max " + std::to_string(max_w) + "): " + line);
             }
-            const std::uint32_t enc_uv = encode_edge(w, v);
-            const std::uint32_t enc_vu = encode_edge(w, u);
+            const std::uint32_t enc_uv = encode_edge(w, v, shift);
+            const std::uint32_t enc_vu = encode_edge(w, u, shift);
             if (enc_uv == INF || enc_vu == INF) {
                 throw std::runtime_error("mtx: encoded edge collides with absent-edge fill value: " + line);
             }
@@ -145,8 +150,9 @@ spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path) {
     return A;
 }
 
-std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A) {
-    const spla::uint     n = A->get_n_rows();
+std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::FormatMatrix working_format) {
+    const spla::uint     n         = A->get_n_rows();
+    const std::uint32_t  enc_shift = edge_encode_shift_for_n(n);
     std::vector<MstEdge> result;
     if (n <= 1) {
         return result;
@@ -158,12 +164,12 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A) {
     // Graph S ⊆ A: only edges whose endpoints lie in different DSU components (rebuilt after merges).
     // Initialized as element-wise copy of A via e-wise add with FIRST (same weights).
     spla::ref_ptr<spla::Matrix> S = spla::Matrix::make(n, n, spla::UINT);
-    S->set_format(spla::FormatMatrix::AccCsr);
+    S->set_format(working_format);
     (void) S->set_fill_value(inf);
     (void) spla::exec_m_eadd(S, A, A, spla::FIRST_UINT, desc);
 
     spla::ref_ptr<spla::Matrix> S_new = spla::Matrix::make(n, n, spla::UINT);
-    S_new->set_format(spla::FormatMatrix::AccCsr);
+    S_new->set_format(working_format);
     (void) S_new->set_fill_value(inf);
 
     Dsu dsu(n);
@@ -178,7 +184,9 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A) {
     spla::ref_ptr<spla::Vector> row_min = spla::Vector::make(n, spla::UINT);
     (void) row_min->set_fill_value(inf);
 
-    while (result.size() < static_cast<std::size_t>(n - 1)) {
+    bool S_is_empty = false;
+
+    while (!S_is_empty) {
         // --- Phase 1: for every vertex v, cheapest outgoing edge in S (SPLA row-wise MIN on packed codes). ---
         for (MstEdge& e : min_edge) {
             e.w = INF;
@@ -197,7 +205,7 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A) {
             const spla::uint root = dsu.find(v);
             std::uint32_t    w_dec;
             spla::uint       dst;
-            decode_edge(code, w_dec, dst);
+            decode_edge(code, w_dec, dst, enc_shift);
             const MstEdge& cur    = min_edge[root];
             const bool     better = w_dec < cur.w || (w_dec == cur.w && dst < cur.v);
             if (better) {
@@ -244,11 +252,14 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A) {
         const auto*       vals =
                 reinterpret_cast<const std::uint32_t*>(vals_view->get_buffer());
 
+        // After swap, S holds cross-component edges only; true iff no set_uint was called on S_new.
+        S_is_empty = true;
         for (std::size_t k = 0; k < nnz_s; ++k) {
             const spla::uint r = rows[k];
             const spla::uint c = cols[k];
             if (dsu.find(r) != dsu.find(c)) {
                 (void) S_new->set_uint(r, c, vals[k]);
+                S_is_empty = false;
             }
         }
         std::swap(S, S_new);

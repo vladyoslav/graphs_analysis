@@ -1,4 +1,3 @@
-#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -8,7 +7,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <vector>
 
 #include <cxxopts.hpp>
@@ -38,30 +36,6 @@ namespace {
         return out;
     }
 
-    double mean_ms(const std::vector<double>& xs) {
-        if (xs.empty()) {
-            return 0.0;
-        }
-        double s = 0.0;
-        for (double x : xs) {
-            s += x;
-        }
-        return s / static_cast<double>(xs.size());
-    }
-
-    double sample_std_dev_ms(const std::vector<double>& xs) {
-        if (xs.size() < 2) {
-            return 0.0;
-        }
-        const double m   = mean_ms(xs);
-        double       acc = 0.0;
-        for (double x : xs) {
-            const double d = x - m;
-            acc += d * d;
-        }
-        return std::sqrt(acc / static_cast<double>(xs.size() - 1));
-    }
-
     std::uint64_t mst_total_weight(const std::vector<MstEdge>& mst) {
         std::uint64_t s = 0;
         for (const MstEdge& e : mst) {
@@ -80,24 +54,23 @@ namespace {
         return vals_view->get_size() / sizeof(std::uint32_t);
     }
 
-    void write_result_csv(const fs::path&    out_path,
-                          const std::string& graph_label,
-                          spla::uint         n,
-                          std::size_t        directed_edges,
-                          unsigned           cores,
-                          int                niters,
-                          std::uint64_t      mst_weight,
-                          std::size_t        mst_edges,
-                          double             mean_ms,
-                          double             std_dev_ms) {
+    void write_result_csv(const fs::path&            out_path,
+                          const std::string&         graph_label,
+                          spla::uint                 n,
+                          std::size_t                directed_edges,
+                          std::uint64_t              mst_weight,
+                          std::size_t                mst_edges,
+                          const std::vector<double>& times_ms) {
         std::ofstream out(out_path);
         if (!out) {
             throw std::runtime_error("cannot open output file: " + out_path.string());
         }
         out << std::fixed << std::setprecision(6);
-        out << "library,graph,vertices,edges,cores,runs,mst_weight,mst_edges,iterations,mean_time_ms,std_dev_ms,memory_mb\n";
-        out << "spla," << csv_field(graph_label) << ',' << n << ',' << directed_edges << ',' << cores << ',' << niters << ','
-            << mst_weight << ',' << mst_edges << ',' << niters << ',' << mean_ms << ',' << std_dev_ms << ",0\n";
+        out << "library,graph,vertices,edges,cores,mst_weight,mst_edges,time_ms\n";
+        for (double time_ms : times_ms) {
+            out << "spla," << csv_field(graph_label) << ',' << n << ',' << directed_edges << ",1,"
+                << mst_weight << ',' << mst_edges << ',' << time_ms << '\n';
+        }
     }
 
 }// namespace
@@ -111,8 +84,9 @@ auto main(int argc, char* argv[]) -> int {
         ("o,out",     "Output CSV path (benchmark table)", cxxopts::value<std::string>())
         ("n,niters",  "Number of timed benchmark runs", cxxopts::value<int>()->default_value("10"))
         ("w,warmup",  "Warmup runs (not timed)", cxxopts::value<int>()->default_value("3"))
-        ("p,platform","SPLA platform index", cxxopts::value<int>()->default_value("0"))
-        ("d,device",  "SPLA device index", cxxopts::value<int>()->default_value("0"))
+        ("c,cpu-only","set_accelerator(None), set_force_no_acceleration(true), CpuCsr", cxxopts::value<bool>()->implicit_value("true")->default_value("false"))
+        ("p,platform","SPLA platform index (ignored with --cpu-only)", cxxopts::value<int>()->default_value("0"))
+        ("d,device",  "SPLA device index (ignored with --cpu-only)", cxxopts::value<int>()->default_value("0"))
         ("h,help",    "Print help");
     // clang-format on
 
@@ -142,6 +116,7 @@ auto main(int argc, char* argv[]) -> int {
     const int         warmup   = parsed["warmup"].as<int>();
     const int         platform = parsed["platform"].as<int>();
     const int         device   = parsed["device"].as<int>();
+    const bool        cpu_only = parsed["cpu-only"].as<bool>();
 
     if (niters < 1) {
         std::cerr << "niters must be >= 1\n";
@@ -152,13 +127,38 @@ auto main(int argc, char* argv[]) -> int {
         return 1;
     }
 
-    spla::Library* library = spla::Library::get();
-    library->set_platform(platform);
-    library->set_device(device);
-    library->set_queues_count(1);
+    std::string              acc_info;
+    spla::Library*           library = spla::Library::get();
+    const spla::FormatMatrix graph_format =
+            cpu_only ? spla::FormatMatrix::CpuCsr : spla::FormatMatrix::AccCsr;
+
+    if (cpu_only) {
+        if (library->set_accelerator(spla::AcceleratorType::None) != spla::Status::Ok) {
+            std::cerr << "set_accelerator(None) failed\n";
+            return 1;
+        }
+        if (library->set_force_no_acceleration(true) != spla::Status::Ok) {
+            std::cerr << "set_force_no_acceleration(true) failed\n";
+            return 1;
+        }
+    } else {
+        if (library->set_force_no_acceleration(false) != spla::Status::Ok) {
+            std::cerr << "set_force_no_acceleration(false) failed\n";
+            return 1;
+        }
+        (void) library->set_platform(platform);
+        (void) library->set_device(device);
+        (void) library->set_queues_count(1);
+    }
+    library->get_accelerator_info(acc_info);
+    std::cout << "env: " << acc_info;
+    if (cpu_only) {
+        std::cout << " (accelerator disabled, force_no_acceleration, CpuCsr)";
+    }
+    std::cout << std::endl;
 
     try {
-        spla::ref_ptr<spla::Matrix> graph = load_graph(mtxpath);
+        spla::ref_ptr<spla::Matrix> graph = load_graph(mtxpath, graph_format);
         if (!graph) {
             std::cerr << "load_graph returned null\n";
             library->finalize();
@@ -168,12 +168,12 @@ auto main(int argc, char* argv[]) -> int {
         const spla::uint  n              = graph->get_n_rows();
         const std::size_t directed_edges = directed_edge_count(graph);
 
-        std::vector<MstEdge> ref_mst = boruvka_mst(graph);
+        std::vector<MstEdge> ref_mst = boruvka_mst(graph, graph_format);
         const std::uint64_t  w_sum   = mst_total_weight(ref_mst);
         const std::size_t    m_edges = ref_mst.size();
 
         for (int i = 0; i < warmup; ++i) {
-            (void) boruvka_mst(graph);
+            (void) boruvka_mst(graph, graph_format);
         }
 
         std::vector<double> times_ms;
@@ -182,22 +182,14 @@ auto main(int argc, char* argv[]) -> int {
         spla::Timer timer;
         for (int i = 0; i < niters; ++i) {
             timer.start();
-            (void) boruvka_mst(graph);
+            (void) boruvka_mst(graph, graph_format);
             timer.stop();
             times_ms.push_back(timer.get_elapsed_ms());
         }
 
-        const double avg   = mean_ms(times_ms);
-        const double stdev = sample_std_dev_ms(times_ms);
-
-        unsigned cores = std::thread::hardware_concurrency();
-        if (cores == 0) {
-            cores = 1;
-        }
-
         const std::string graph_label = fs::path(mtxpath).filename().string();
 
-        write_result_csv(out_path, graph_label, n, directed_edges, cores, niters, w_sum, m_edges, avg, stdev);
+        write_result_csv(out_path, graph_label, n, directed_edges, w_sum, m_edges, times_ms);
 
         library->finalize();
     } catch (const std::exception& e) {
