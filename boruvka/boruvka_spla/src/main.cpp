@@ -127,8 +127,8 @@ auto main(int argc, char* argv[]) -> int {
         return 1;
     }
 
-    std::string    acc_info;
-    spla::Library* library = spla::Library::get();
+    std::string              acc_info;
+    spla::Library*           library = spla::Library::get();
     const spla::FormatMatrix graph_format =
             cpu_only ? spla::FormatMatrix::CpuCsr : spla::FormatMatrix::AccCsr;
 

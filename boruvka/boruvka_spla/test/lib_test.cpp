@@ -49,10 +49,10 @@ struct LoadGraphCase {
 };
 
 struct BoruvkaCase {
-    const char*            id;
-    const char*            mtx_filename;
-    spla::uint             expected_n;
-    std::vector<MstEdge>   expected_mst;
+    const char*          id;
+    const char*          mtx_filename;
+    spla::uint           expected_n;
+    std::vector<MstEdge> expected_mst;
 };
 
 void PrintTo(const LoadGraphCase& c, std::ostream* os) {
