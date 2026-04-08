@@ -1,0 +1,6 @@
+library,graph,vertices,edges,cores,mst_weight,mst_edges,time_ms
+spark,delaunay_n17.mtx,131072,393176,1,1.00987109E8,131071,7200.82
+spark,delaunay_n17.mtx,131072,393176,1,1.00987109E8,131071,6174.28
+spark,delaunay_n17.mtx,131072,393176,1,1.00987109E8,131071,5984.06
+spark,delaunay_n17.mtx,131072,393176,1,1.00987109E8,131071,5731.21
+spark,delaunay_n17.mtx,131072,393176,1,1.00987109E8,131071,5876.68

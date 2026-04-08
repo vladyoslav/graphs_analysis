@@ -1,0 +1,6 @@
+library,graph,vertices,edges,cores,mst_weight,mst_edges,time_ms
+spark,road-luxembourg-osm.mtx,114599,119666,1,1.15195734E8,114598,7188.74
+spark,road-luxembourg-osm.mtx,114599,119666,1,1.15195734E8,114598,6887.51
+spark,road-luxembourg-osm.mtx,114599,119666,1,1.15195734E8,114598,6713.99
+spark,road-luxembourg-osm.mtx,114599,119666,1,1.15195734E8,114598,5860.87
+spark,road-luxembourg-osm.mtx,114599,119666,1,1.15195734E8,114598,5052.12

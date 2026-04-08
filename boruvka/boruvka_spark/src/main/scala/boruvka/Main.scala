@@ -297,9 +297,11 @@ object Main {
 
         println(s"Run ${i + 1}/$numRuns: ${"%.2f".format(timeMs)} ms")
 
+        val timeMsStr = String.format(java.util.Locale.US, "%.2f", timeMs.asInstanceOf[java.lang.Double])
+
         val row =
           s"spark,$graphName,${meta.vertices},${meta.edges},$actualCores," +
-            s"${lastResult.weight},${lastResult.edges.size},${"%.2f".format(timeMs)}"
+            s"${lastResult.weight},${lastResult.edges.size},$timeMsStr"
 
         csvRows += row
       }

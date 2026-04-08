@@ -1,0 +1,6 @@
+library,graph,vertices,edges,cores,mst_weight,mst_edges,time_ms
+spark,road-usroads-48.mtx,126146,161950,1,1.17993855E8,126145,6859.62
+spark,road-usroads-48.mtx,126146,161950,1,1.17993855E8,126145,6813.76
+spark,road-usroads-48.mtx,126146,161950,1,1.17993855E8,126145,6706.40
+spark,road-usroads-48.mtx,126146,161950,1,1.17993855E8,126145,6806.76
+spark,road-usroads-48.mtx,126146,161950,1,1.17993855E8,126145,7044.79
