@@ -116,10 +116,9 @@ spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path, spla::Format
 std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::FormatMatrix working_format) {
     const spla::uint     n         = A->get_n_rows();
     const std::uint32_t  enc_shift = edge_encode_shift_for_n(n);
+    const std::uint32_t  nbr_mask  = (1u << enc_shift) - 1u;
     std::vector<MstEdge> result;
-    if (n <= 1) {
-        return result;
-    }
+    if (n <= 1) return result;
 
     auto desc = spla::Descriptor::make();
     auto inf  = spla::Scalar::make_uint(INF);
@@ -135,18 +134,21 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::For
     S_new->set_format(working_format);
     (void) S_new->set_fill_value(inf);
 
-    // P: membership matrix — P[parent[i]][i] = 1.
-    // Row `root` of P has 1s in columns belonging to that component.
-    auto P = spla::Matrix::make(n, n, spla::UINT);
-    P->set_format(working_format);
-
     // edge[i] = min packed (weight, neighbor) for vertex i  (GPU output)
     auto edge = spla::Vector::make(n, spla::UINT);
     (void) edge->set_fill_value(inf);
 
-    // cedge[root] = min packed (weight, neighbor) for component root  (GPU output via P × edge)
+    // cedge[root] = min packed edge for component root  (GPU output via scatter-reduce)
     auto cedge = spla::Vector::make(n, spla::UINT);
     (void) cedge->set_fill_value(inf);
+
+    // scatter_v: sparse vector for eadd_fdb — keys remapped from vertex to parent[vertex].
+    // set_reduce(MIN) resolves duplicate keys (multiple vertices in same component) during build.
+    auto scatter_v = spla::Vector::make(n, spla::UINT);
+    (void) scatter_v->set_reduce(spla::MIN_UINT);
+
+    // fdb: feedback vector from eadd_fdb (tracks which entries were updated)
+    auto fdb = spla::Vector::make(n, spla::UINT);
 
     // Dense mask for mxv (fill_value makes every position active with ALWAYS select)
     auto mask = spla::Vector::make(n, spla::UINT);
@@ -171,53 +173,60 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::For
                 spla::FIRST_UINT, spla::MIN_UINT, spla::ALWAYS_UINT,
                 inf, desc);
 
-        // ==== Step 2: Build membership matrix P[parent[i]][i] = 1 ====
-        (void) P->clear();
-        for (spla::uint i = 0; i < n; ++i) {
-            (void) P->set_uint(parent[i], i, 1u);
-        }
-
-        // ==== Step 3: Aggregate at roots — cedge = P ×(SECOND,MIN) edge  (GPU) ====
-        // SECOND(P[root][j], edge[j]) = edge[j]; MIN reduces over vertices in the component.
-        (void) cedge->fill_with(inf);
-        (void) spla::exec_mxv_masked(
-                cedge, mask, P, edge,
-                spla::SECOND_UINT, spla::MIN_UINT, spla::ALWAYS_UINT,
-                inf, desc);
-
-        // ==== Step 4: Select MST edges + update parent (CPU) ====
-
-        // Bulk-read GPU vectors in two transfers.
+        // ==== Step 2: Aggregate at roots via exec_v_eadd_fdb (GPU) ====
+        // Read edge vector (GPU → CPU), remap keys vertex → parent[vertex],
+        // build sparse scatter_v, then scatter-reduce into cedge.
+        // eadd_fdb: for each (key, val) in scatter_v, cedge[key] = MIN(cedge[key], val).
         spla::ref_ptr<spla::MemView> edge_keys_view, edge_vals_view;
         (void) edge->read(edge_keys_view, edge_vals_view);
         const std::size_t edge_nnz  = edge_vals_view->get_size() / sizeof(std::uint32_t);
         const auto*       edge_keys = static_cast<const spla::uint*>(edge_keys_view->get_buffer());
         const auto*       edge_vals = reinterpret_cast<const std::uint32_t*>(edge_vals_view->get_buffer());
 
+        std::vector<spla::uint>    scatter_keys;
+        std::vector<std::uint32_t> scatter_vals;
+        scatter_keys.reserve(edge_nnz);
+        scatter_vals.reserve(edge_nnz);
+        for (std::size_t k = 0; k < edge_nnz; ++k) {
+            if (edge_vals[k] != INF) {
+                scatter_keys.push_back(parent[edge_keys[k]]);
+                scatter_vals.push_back(edge_vals[k]);
+            }
+        }
+
+        (void) scatter_v->clear();
+        if (!scatter_keys.empty()) {
+            (void) scatter_v->build(
+                    spla::MemView::make(scatter_keys.data(), scatter_keys.size() * sizeof(spla::uint)),
+                    spla::MemView::make(scatter_vals.data(), scatter_vals.size() * sizeof(std::uint32_t)));
+        }
+        (void) cedge->fill_with(inf);
+        (void) spla::exec_v_eadd_fdb(cedge, scatter_v, fdb, spla::MIN_UINT, desc);
+
+        // Read cedge (GPU → CPU) and materialize into cedge_packed[root].
         spla::ref_ptr<spla::MemView> cedge_keys_view, cedge_vals_view;
         (void) cedge->read(cedge_keys_view, cedge_vals_view);
         const std::size_t cedge_nnz  = cedge_vals_view->get_size() / sizeof(std::uint32_t);
         const auto*       cedge_keys = static_cast<const spla::uint*>(cedge_keys_view->get_buffer());
         const auto*       cedge_vals = reinterpret_cast<const std::uint32_t*>(cedge_vals_view->get_buffer());
 
-        // Materialize cedge into a CPU array indexed by root.
-        std::vector<std::uint32_t> cedge_cpu(n, INF);
-        for (std::size_t i = 0; i < cedge_nnz; ++i) {
-            if (cedge_vals[i] != INF) {
-                cedge_cpu[cedge_keys[i]] = cedge_vals[i];
+        std::vector<std::uint32_t> cedge_packed(n, INF);
+        for (std::size_t k = 0; k < cedge_nnz; ++k) {
+            if (cedge_vals[k] != INF) {
+                cedge_packed[cedge_keys[k]] = cedge_vals[k];
             }
         }
+
+        // ==== Step 3: Select MST edges + update parent (CPU) ====
 
         // For each root, find the source vertex that contributed the component minimum.
         // O(edge_nnz) single scan — avoids an inner loop per root.
         std::vector<spla::uint> comp_src(n, n);
         for (std::size_t k = 0; k < edge_nnz; ++k) {
-            const spla::uint v = edge_keys[k];
-            const spla::uint r = parent[v];
-            if (edge_vals[k] != INF && edge_vals[k] == cedge_cpu[r]) {
-                if (comp_src[r] == n || v < comp_src[r]) {
-                    comp_src[r] = v;
-                }
+            if (edge_vals[k] == INF) continue;
+            const spla::uint r = parent[edge_keys[k]];
+            if (edge_vals[k] == cedge_packed[r] && edge_keys[k] < comp_src[r]) {
+                comp_src[r] = edge_keys[k];
             }
         }
 
@@ -226,14 +235,10 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::For
         // the larger one is already demoted when reached.
         bool added = false;
         for (spla::uint r = 0; r < n; ++r) {
-            if (parent[r] != r) continue;
-            if (cedge_cpu[r] == INF) continue;
+            if (parent[r] != r || cedge_packed[r] == INF) continue;
 
-            std::uint32_t w;
-            spla::uint    j_dest;
-            decode_edge(cedge_cpu[r], w, j_dest, enc_shift);
-
-            const spla::uint dest_root = parent[j_dest];
+            const spla::uint dest_nbr  = cedge_packed[r] & nbr_mask;
+            const spla::uint dest_root = parent[dest_nbr];
             if (r == dest_root) continue;
 
             const spla::uint mn = std::min(r, dest_root);
@@ -241,15 +246,14 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::For
             parent[mx]          = mn;
 
             const spla::uint src = (comp_src[r] != n) ? comp_src[r] : r;
-            const spla::uint lo  = std::min(src, j_dest);
-            const spla::uint hi  = std::max(src, j_dest);
-            result.push_back(MstEdge{lo, hi, w});
+            const spla::uint lo  = std::min(src, dest_nbr);
+            const spla::uint hi  = std::max(src, dest_nbr);
+            result.push_back(MstEdge{lo, hi, cedge_packed[r] >> enc_shift});
             added = true;
         }
-
         if (!added) break;
 
-        // ==== Step 5: Path compression (CPU) ====
+        // ==== Step 4: Path compression (CPU) ====
         // Flatten the parent forest: parent[i] = root for all i.
         // Repeated pointer jumping: parent[i] ← parent[parent[i]] until convergence.
         bool changed = true;
@@ -264,9 +268,10 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::For
             }
         }
 
-        // ==== Step 6: Remove intra-component edges — COO filter + rebuild ====
-        // After path compression parent[i] is the root directly
-        (void) S_new->clear();
+        // ==== Step 5: Remove intra-component edges — COO filter + Matrix::build ====
+        // After path compression parent[i] is the root directly, so a simple
+        // comparison suffices.  Filtered COO is loaded in one bulk build() call
+        // instead of individual set_uint per edge.
         spla::ref_ptr<spla::MemView> rows_view, cols_view, vals_view;
         (void) S->read(rows_view, cols_view, vals_view);
         const std::size_t nnz_s = vals_view->get_size() / sizeof(std::uint32_t);
@@ -274,12 +279,27 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::For
         const auto*       cols  = static_cast<const spla::uint*>(cols_view->get_buffer());
         const auto*       vals  = reinterpret_cast<const std::uint32_t*>(vals_view->get_buffer());
 
-        S_is_empty = true;
+        std::vector<spla::uint>    new_rows, new_cols;
+        std::vector<std::uint32_t> new_vals;
+        new_rows.reserve(nnz_s);
+        new_cols.reserve(nnz_s);
+        new_vals.reserve(nnz_s);
+
         for (std::size_t k = 0; k < nnz_s; ++k) {
             if (parent[rows[k]] != parent[cols[k]]) {
-                (void) S_new->set_uint(rows[k], cols[k], vals[k]);
-                S_is_empty = false;
+                new_rows.push_back(rows[k]);
+                new_cols.push_back(cols[k]);
+                new_vals.push_back(vals[k]);
             }
+        }
+
+        S_is_empty = new_rows.empty();
+        (void) S_new->clear();
+        if (!S_is_empty) {
+            (void) S_new->build(
+                    spla::MemView::make(new_rows.data(), new_rows.size() * sizeof(spla::uint)),
+                    spla::MemView::make(new_cols.data(), new_cols.size() * sizeof(spla::uint)),
+                    spla::MemView::make(new_vals.data(), new_vals.size() * sizeof(std::uint32_t)));
         }
         std::swap(S, S_new);
     }
