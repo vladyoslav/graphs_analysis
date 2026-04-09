@@ -114,9 +114,8 @@ spla::ref_ptr<spla::Matrix> load_graph(const std::string& mtx_path, spla::Format
 }
 
 std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::FormatMatrix working_format) {
-    const spla::uint     n         = A->get_n_rows();
-    const std::uint32_t  enc_shift = edge_encode_shift_for_n(n);
-    const std::uint32_t  nbr_mask  = (1u << enc_shift) - 1u;
+    const spla::uint    n         = A->get_n_rows();
+    const std::uint32_t enc_shift = edge_encode_shift_for_n(n);
     std::vector<MstEdge> result;
     if (n <= 1) return result;
 
@@ -237,7 +236,10 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::For
         for (spla::uint r = 0; r < n; ++r) {
             if (parent[r] != r || cedge_packed[r] == INF) continue;
 
-            const spla::uint dest_nbr  = cedge_packed[r] & nbr_mask;
+            std::uint32_t weight;
+            spla::uint    dest_nbr;
+            decode_edge(cedge_packed[r], weight, dest_nbr, enc_shift);
+
             const spla::uint dest_root = parent[dest_nbr];
             if (r == dest_root) continue;
 
@@ -248,7 +250,7 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::For
             const spla::uint src = (comp_src[r] != n) ? comp_src[r] : r;
             const spla::uint lo  = std::min(src, dest_nbr);
             const spla::uint hi  = std::max(src, dest_nbr);
-            result.push_back(MstEdge{lo, hi, cedge_packed[r] >> enc_shift});
+            result.push_back(MstEdge{lo, hi, weight});
             added = true;
         }
         if (!added) break;
