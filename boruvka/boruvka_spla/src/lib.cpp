@@ -218,15 +218,12 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::For
 
         // ==== Step 3: Select MST edges + update parent (CPU) ====
 
-        // Snapshot DSU before any merges this round: cedge_packed / comp_src use this partition.
-        const std::vector<spla::uint> parent_at_round_start = parent;
-
         // For each root, find the source vertex that contributed the component minimum.
         // O(edge_nnz) single scan — avoids an inner loop per root.
         std::vector<spla::uint> comp_src(n, n);
         for (std::size_t k = 0; k < edge_nnz; ++k) {
             if (edge_vals[k] == INF) continue;
-            const spla::uint r = parent_at_round_start[edge_keys[k]];
+            const spla::uint r = parent[edge_keys[k]];
             if (edge_vals[k] == cedge_packed[r] && edge_keys[k] < comp_src[r]) {
                 comp_src[r] = edge_keys[k];
             }
@@ -250,13 +247,8 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::For
             spla::uint    dest_nbr;
             decode_edge(cedge_packed[r], weight, dest_nbr, enc_shift);
 
-            const spla::uint dest_root_start = parent_at_round_start[dest_nbr];
-            if (r == dest_root_start) {
-                continue;
-            }
-
             const spla::uint rr = find_live_root(r);
-            const spla::uint dd = find_live_root(dest_root_start);
+            const spla::uint dd = find_live_root(dest_nbr);
             if (rr == dd) {
                 continue;
             }
