@@ -1,6 +1,0 @@
-library,graph,vertices,edges,cores,mst_weight,mst_edges,time_ms
-spark,soc-LiveMocha.mtx,104103,2193083,1,1.6935507E7,104102,5673.92
-spark,soc-LiveMocha.mtx,104103,2193083,1,1.6935507E7,104102,5166.00
-spark,soc-LiveMocha.mtx,104103,2193083,1,1.6935507E7,104102,5347.20
-spark,soc-LiveMocha.mtx,104103,2193083,1,1.6935507E7,104102,5479.40
-spark,soc-LiveMocha.mtx,104103,2193083,1,1.6935507E7,104102,5216.17

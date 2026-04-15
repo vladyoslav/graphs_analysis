@@ -1,0 +1,6 @@
+library,graph,vertices,edges,cores,mst_weight,mst_edges,time_ms
+spark,USA-road-d.NY.mtx,264346,730100,12,2.604439E8,264345,11382.96
+spark,USA-road-d.NY.mtx,264346,730100,12,2.604439E8,264345,10779.02
+spark,USA-road-d.NY.mtx,264346,730100,12,2.604439E8,264345,11141.91
+spark,USA-road-d.NY.mtx,264346,730100,12,2.604439E8,264345,10828.74
+spark,USA-road-d.NY.mtx,264346,730100,12,2.604439E8,264345,11134.99

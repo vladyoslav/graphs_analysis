@@ -1,0 +1,6 @@
+library,graph,vertices,edges,cores,mst_weight,mst_edges,time_ms
+spark,road-belgium-osm.mtx,1441295,1549970,12,1.432203278E9,1441294,37625.26
+spark,road-belgium-osm.mtx,1441295,1549970,12,1.432203278E9,1441294,37270.14
+spark,road-belgium-osm.mtx,1441295,1549970,12,1.432203278E9,1441294,37387.91
+spark,road-belgium-osm.mtx,1441295,1549970,12,1.432203278E9,1441294,37364.78
+spark,road-belgium-osm.mtx,1441295,1549970,12,1.432203278E9,1441294,37291.28
