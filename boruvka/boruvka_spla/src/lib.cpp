@@ -137,18 +137,6 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::For
     auto edge = spla::Vector::make(n, spla::UINT);
     (void) edge->set_fill_value(inf);
 
-    // cedge[root] = min packed edge for component root  (GPU output via scatter-reduce)
-    auto cedge = spla::Vector::make(n, spla::UINT);
-    (void) cedge->set_fill_value(inf);
-
-    // scatter_v: sparse vector for eadd_fdb — keys remapped from vertex to parent[vertex].
-    // set_reduce(MIN) resolves duplicate keys (multiple vertices in same component) during build.
-    auto scatter_v = spla::Vector::make(n, spla::UINT);
-    (void) scatter_v->set_reduce(spla::MIN_UINT);
-
-    // fdb: feedback vector from eadd_fdb (tracks which entries were updated)
-    auto fdb = spla::Vector::make(n, spla::UINT);
-
     // Dense mask for mxv (fill_value makes every position active with ALWAYS select)
     auto mask = spla::Vector::make(n, spla::UINT);
     (void) mask->set_fill_value(spla::Scalar::make_uint(1u));
@@ -172,67 +160,35 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::For
                 spla::FIRST_UINT, spla::MIN_UINT, spla::ALWAYS_UINT,
                 inf, desc);
 
-        // ==== Step 2: Aggregate at roots via exec_v_eadd_fdb (GPU) ====
-        // Read edge vector (GPU → CPU), remap keys vertex → parent[vertex],
-        // build sparse scatter_v, then scatter-reduce into cedge.
-        // eadd_fdb: for each (key, val) in scatter_v, cedge[key] = MIN(cedge[key], val).
+        // ==== Step 2: Aggregate at roots (CPU) ====
+        // Read edge vector (GPU → CPU), decode each entry, keep the best
+        // (weight, dst, src) per component root in cedge[root].
+        // Tiebreaking mirrors the packed encoding: weight-major, then dst, then src.
         spla::ref_ptr<spla::MemView> edge_keys_view, edge_vals_view;
         (void) edge->read(edge_keys_view, edge_vals_view);
         const std::size_t edge_nnz  = edge_vals_view->get_size() / sizeof(std::uint32_t);
         const auto*       edge_keys = static_cast<const spla::uint*>(edge_keys_view->get_buffer());
         const auto*       edge_vals = reinterpret_cast<const std::uint32_t*>(edge_vals_view->get_buffer());
 
-        std::vector<spla::uint>    scatter_keys;
-        std::vector<std::uint32_t> scatter_vals;
-        scatter_keys.reserve(edge_nnz);
-        scatter_vals.reserve(edge_nnz);
+        // cedge[root] = best outgoing edge for the component; .u = src, .v = dst (not yet normalised).
+        const MstEdge        NO_EDGE{n, n, INF};
+        std::vector<MstEdge> cedge(n, NO_EDGE);
         for (std::size_t k = 0; k < edge_nnz; ++k) {
-            if (edge_vals[k] != INF) {
-                scatter_keys.push_back(parent[edge_keys[k]]);
-                scatter_vals.push_back(edge_vals[k]);
-            }
-        }
-
-        (void) scatter_v->clear();
-        if (!scatter_keys.empty()) {
-            (void) scatter_v->build(
-                    spla::MemView::make(scatter_keys.data(), scatter_keys.size() * sizeof(spla::uint)),
-                    spla::MemView::make(scatter_vals.data(), scatter_vals.size() * sizeof(std::uint32_t)));
-        }
-        (void) cedge->fill_with(inf);
-        (void) spla::exec_v_eadd_fdb(cedge, scatter_v, fdb, spla::MIN_UINT, desc);
-
-        // Read cedge (GPU → CPU) and materialize into cedge_packed[root].
-        spla::ref_ptr<spla::MemView> cedge_keys_view, cedge_vals_view;
-        (void) cedge->read(cedge_keys_view, cedge_vals_view);
-        const std::size_t cedge_nnz  = cedge_vals_view->get_size() / sizeof(std::uint32_t);
-        const auto*       cedge_keys = static_cast<const spla::uint*>(cedge_keys_view->get_buffer());
-        const auto*       cedge_vals = reinterpret_cast<const std::uint32_t*>(cedge_vals_view->get_buffer());
-
-        std::vector<std::uint32_t> cedge_packed(n, INF);
-        for (std::size_t k = 0; k < cedge_nnz; ++k) {
-            if (cedge_vals[k] != INF) {
-                cedge_packed[cedge_keys[k]] = cedge_vals[k];
+            if (edge_vals[k] == INF) continue;
+            std::uint32_t w;
+            spla::uint    dst;
+            decode_edge(edge_vals[k], w, dst, enc_shift);
+            const spla::uint src  = edge_keys[k];
+            const spla::uint root = parent[src];
+            if (std::tie(w, dst, src) < std::tie(cedge[root].w, cedge[root].v, cedge[root].u)) {
+                cedge[root] = {src, dst, w};
             }
         }
 
         // ==== Step 3: Select MST edges + update parent (CPU) ====
 
-        // For each root, find the source vertex that contributed the component minimum.
-        // O(edge_nnz) single scan — avoids an inner loop per root.
-        std::vector<spla::uint> comp_src(n, n);
-        for (std::size_t k = 0; k < edge_nnz; ++k) {
-            if (edge_vals[k] == INF) continue;
-            const spla::uint r = parent[edge_keys[k]];
-            if (edge_vals[k] == cedge_packed[r] && edge_keys[k] < comp_src[r]) {
-                comp_src[r] = edge_keys[k];
-            }
-        }
-
         auto find_live_root = [&parent](spla::uint x) -> spla::uint {
-            while (parent[x] != x) {
-                x = parent[x];
-            }
+            while (parent[x] != x) x = parent[x];
             return x;
         };
 
@@ -241,26 +197,19 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::For
         // the larger one is already demoted when reached.
         bool added = false;
         for (spla::uint r = 0; r < n; ++r) {
-            if (parent[r] != r || cedge_packed[r] == INF) continue;
-
-            std::uint32_t weight;
-            spla::uint    dest_nbr;
-            decode_edge(cedge_packed[r], weight, dest_nbr, enc_shift);
+            if (parent[r] != r || cedge[r].w == INF) continue;
 
             const spla::uint rr = find_live_root(r);
-            const spla::uint dd = find_live_root(dest_nbr);
-            if (rr == dd) {
-                continue;
-            }
+            const spla::uint dd = find_live_root(cedge[r].v);
+            if (rr == dd) continue;
 
             const spla::uint mn = std::min(rr, dd);
             const spla::uint mx = std::max(rr, dd);
             parent[mx]          = mn;
 
-            const spla::uint src = (comp_src[r] != n) ? comp_src[r] : r;
-            const spla::uint lo  = std::min(src, dest_nbr);
-            const spla::uint hi  = std::max(src, dest_nbr);
-            result.push_back(MstEdge{lo, hi, weight});
+            const spla::uint lo = std::min(cedge[r].u, cedge[r].v);
+            const spla::uint hi = std::max(cedge[r].u, cedge[r].v);
+            result.push_back(MstEdge{lo, hi, cedge[r].w});
             added = true;
         }
         if (!added) break;
