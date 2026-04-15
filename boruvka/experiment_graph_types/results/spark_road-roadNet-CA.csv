@@ -1,0 +1,6 @@
+library,graph,vertices,edges,cores,mst_weight,mst_edges,time_ms
+spark,road-roadNet-CA.mtx,1957027,2760388,12,1.883352706E9,1957026,53765.74
+spark,road-roadNet-CA.mtx,1957027,2760388,12,1.883352706E9,1957026,53997.46
+spark,road-roadNet-CA.mtx,1957027,2760388,12,1.883352706E9,1957026,54751.12
+spark,road-roadNet-CA.mtx,1957027,2760388,12,1.883352706E9,1957026,54611.60
+spark,road-roadNet-CA.mtx,1957027,2760388,12,1.883352706E9,1957026,56041.69

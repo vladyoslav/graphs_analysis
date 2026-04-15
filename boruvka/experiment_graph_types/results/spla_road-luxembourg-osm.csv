@@ -1,6 +1,0 @@
-library,graph,vertices,edges,cores,mst_weight,mst_edges,time_ms
-spla,road-luxembourg-osm.mtx,114599,239332,1,115195734,114598,370.946000
-spla,road-luxembourg-osm.mtx,114599,239332,1,115195734,114598,368.182000
-spla,road-luxembourg-osm.mtx,114599,239332,1,115195734,114598,368.897000
-spla,road-luxembourg-osm.mtx,114599,239332,1,115195734,114598,434.922000
-spla,road-luxembourg-osm.mtx,114599,239332,1,115195734,114598,400.389000

@@ -23,11 +23,16 @@ size: 16:9
 
 # Apache Spark
 
-**Apache Spark** ([spark.apache.org](https://spark.apache.org/)) — **распределённый** движок вычислений поверх кластера (**Scala**/**Java**/**Python**/**R**); ориентир на **память** и **план запросов** вместо лишних обращений к диску.
+**Apache Spark** — фреймворк для распределённой обработки больших данных
 
-- **Масштаб и устойчивость**: разбиение данных по узлам, перезапуск задач при сбоях, рост почти «добавили воркеры»
-- **Стек в одном месте**: **Spark SQL**, **DataFrame/Dataset**, потоки (**Structured Streaming**), **MLlib** — без сшивания десятка разных систем
-- **Графы**: **GraphX** и супер-шаги в духе **Pregel** — итеративные обходы и агрегации по распределённому графу
+**Ключевые особенности:**
+- Вычисления **in-memory** (в оперативной памяти)
+- Автоматический **параллелизм** на кластере машин
+
+**GraphX** — модуль для работы с графами:
+- Автоматическое распределение графа по узлам
+- Итеративные алгоритмы в стиле **Pregel**
+- API для графовых операций (`aggregateMessages`, `connectedComponents`)
 
 ---
 
@@ -77,27 +82,65 @@ size: 16:9
 
 # Борувка в терминах Apache Spark
 
-**Данные:**
-- $G = (V, E)$ — GraphX граф с атрибутом вершины $comp[v]$
-- `aggregateMessages` — для рассылки/агрегации рёбер между вершинами
-- `collectAsMap` — сбор vertex → component маппинга на драйвер
-- `UnionFind` — структура для объединения компонент (на драйвере)
+**Инициализация:**
+
+Graph[Long, Short]
+- vertices: VertexRDD[Long] — (vertexId, componentId)
+- edges: EdgeRDD[Short] — (src, dst, weight)
+
+
+currentGraph = graph.**mapVertices**((vid, _) => vid)
+
+**Шаг 1: Минимальное ребро для каждой вершины**
+
+cheapestPerVertex = currentGraph.**aggregateMessages**(
+  **sendMsg**: если компоненты разные → отправить ребро,
+  **mergeMsg**: выбрать минимальное
+)
 
 ---
 
-# Борувка в терминах Apache Spark
+# Борувка в Apache Spark 
 
-**Инициализация:** $comp[v] = v$
+**Шаг 2: Минимальное ребро для компоненты**
 
-**while** есть межкомпонентные рёбра:
+cheapestPerComponent = cheapestPerVertex
+  .**innerJoin**(vertices) — добавить componentId
+  .**reduceByKey**(min) — минимум по компоненте
 
-1. `aggregateMessages` — каждая вершина отправляет соседям 
-   своё минимальное ребро; получатель выбирает минимум
-2. `collectAsMap` — собрать карту (вершина → компонента)
-3. Для каждой компоненты выбрать минимальное исходящее ребро
-4. `UnionFind.union` — объединить компоненты на драйвере
-5. `outerJoinVertices` — обновить id компонент у всех вершин
-6. `subgraph` — удалить рёбра внутри одной компоненты
+**Шаг 3: Дедупликация рёбер**
+
+finalEdges = cheapestPerComponent
+  .**map**(нормализовать пары компонент)
+  .**reduceByKey**(min) — одно ребро на пару (A,B)
+
+---
+
+# Борувка в Apache Spark 
+
+**Шаг 4: Объединить компоненты**
+
+Вариант A (гибридный):
+  updates = **Union-Find** на driver + parallelize обратно
+
+Вариант B (Spark-only):
+  updates = Graph(components, edges).**connectedComponents**()
+
+---
+
+# Борувка в Apache Spark
+
+**Шаг 5: Применить обновления**
+
+vertexToNewComp = vertices
+  .**map**(vertexId, oldComp) → (oldComp, vertexId)
+  .**join**(updates)
+  .**map** → (vertexId, newComp)
+
+currentGraph = currentGraph
+  .**outerJoinVertices**(vertexToNewComp) — обновить componentId
+  .**subgraph**(оставить только межкомпонентные рёбра)
+
 
 ---
 
@@ -149,21 +192,41 @@ size: 16:9
 
 # Данные Эксперимент 2
 
-<style scoped>table { margin: 20px 0; font-size: 22px; }</style>
+# Данные эксперимента: Road Networks
 
-| Тип | Граф | Вершины | Рёбра |
-|:-----|:------|--------:|--------:|
-| Road | road-luxembourg-osm | 114 599 | 119 666 |
-| Road | road-usroads-48 | 126 146 | 161 950 |
-| Road | road-roadNet-PA | 1 087 562 | 1 541 514 |
-| Geometric | delaunay_n17 | 131 072 | 393 176 |
-| Geometric | delaunay_n18 | 262 144 | 786 396 |
-| Geometric | delaunay_n20 | 1 048 576 | 3 145 686 |
-| Social | soc-LiveMocha | 104 103 | 2 193 083 |
-| Social | ca-MathSciNet | 332 689 | 820 644 |
-| Social | soc-lastfm | 1 191 805 | 4 519 330 |
+| Граф | Вершины | Рёбра |
+|:------|--------:|--------:|
+| road-usroads | 129 164 | 165 435 |
+| USA-road-d.NY | 264 346 | 730 100 |
+| USA-road-d.COL | 435 666 | 1 042 400 |
+| road-belgium-osm | 1 038 823 | 1 549 970 |
+| road-roadNet-CA | 1 957 027 | 2 760 388 |
 
-Источник: [Network Repository](https://networkrepository.com/)
+---
+
+# Данные эксперимента: Geometric Graphs
+
+| Граф | Вершины | Рёбра |
+|:------|--------:|--------:|
+| delaunay_n17 | 131 072 | 393 176 |
+| delaunay_n18 | 262 144 | 786 396 |
+| delaunay_n19 | 524 288 | 1 572 823 |
+| delaunay_n20 | 1 048 576 | 3 145 686 |
+| delaunay_n21 | 2 097 152 | 6 291 408 |
+
+---
+
+# Данные эксперимента: Social & Collaboration Networks
+
+| Граф | Вершины | Рёбра |
+|:------|--------:|--------:|
+| soc-sign-epinions | 131 828 | 840 799 |
+| ca-citeseer | 227 320 | 814 134 |
+| soc-flickr | 513 969 | 3 190 452 |
+| soc-lastfm | 1 191 805 | 4 519 330 |
+| soc-flickr-und | 2 394 385 | 15 555 042 |
+
+Источник: [Network Repository (NRVIS)](https://networkrepository.com/)
 
 ---
 
@@ -186,11 +249,11 @@ size: 16:9
 
 # Характеристики машины Эксперимент 2
 
-**ОС:** Windows 10, 64-разрядная
+**ОС:** Windows 10 Pro (22H2)
 
 **CPU:** 12th Gen Intel Core i5-1235U @ 1.30 GHz
-- 10 ядер (2P + 8E), 12 потоков
+- Ядра: 10 (2 производительных + 8 эффективных)
+- Потоки: 12
+- L3 Кэш: 12 МБ
 
-**GPU:** Intel Iris Xe Graphics (128 MB, интегрированная)
-
-**RAM:** 32 ГБ
+**RAM:** 32 ГБ DDR4, 3200 МГц

@@ -2,6 +2,7 @@ package boruvka
 
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.graphx._
+import org.apache.spark.rdd.RDD  // ← ДОБАВЛЕНО
 
 import java.io.{File, PrintWriter}
 
@@ -15,16 +16,22 @@ object Main {
   }
 
   /** Builds an undirected GraphX graph from result edges. */
-  def buildMstGraph(sc: SparkContext, edges: List[Boruvka.MstEdge]): Graph[Byte, Short] = {
+  def buildMstGraph(sc: SparkContext, edges: List[Boruvka.MstEdge], numVertices: Long): Graph[Byte, Short] = {  // ← ИЗМЕНЕНО
+    // Создаём ВСЕ вершины явно
+    val vertices: RDD[(VertexId, Byte)] = sc.parallelize(
+      (1L to numVertices).map(id => (id, 0.toByte))
+    )
+    
     val graphEdges = sc.parallelize(
       edges.flatMap { e =>
         List(
-        Edge(e.src, e.dst, 1.toShort),
-        Edge(e.dst, e.src, 1.toShort)
+          Edge(e.src, e.dst, 1.toShort),
+          Edge(e.dst, e.src, 1.toShort)
         )
       }
     )
-    Graph.fromEdges(graphEdges, 0.toByte)
+    
+    Graph(vertices, graphEdges)  // ← ИЗМЕНЕНО
   }
 
   /** Counts unique vertices covered by result edges. */
@@ -231,8 +238,7 @@ object Main {
       }
 
       graph = timed("load graph") {
-        val g = loadMtxGraph(sc, inputPath)
-        g
+        loadMtxGraph(sc, inputPath, meta)  // ← ИЗМЕНЕНО: передаём meta
       }
 
       printHeap("after load graph", mem)
@@ -313,14 +319,15 @@ object Main {
 
       if (checks) {
         val (resultComponents, coveredVertices) = timed("final result check") {
-          val resultGraph = buildMstGraph(sc, lastResult.edges)
+          val resultGraph = buildMstGraph(sc, lastResult.edges, meta.vertices)  // ← ИЗМЕНЕНО: передаём meta.vertices
           val components = resultGraph.connectedComponents().vertices.map(_._2).distinct().count()
           val covered = countCoveredVertices(lastResult.edges)
 
           (components, covered)
         }
 
-        val vertexCountCorrect = coveredVertices == meta.vertices
+        // ← ИЗМЕНЕНО: улучшенная проверка вершин
+        val vertexCountCorrect = lastResult.edges.size == (meta.vertices - inputComponents)
         val componentCountCorrect = resultComponents == inputComponents
         val edgeCountCorrect = lastResult.edges.size == expectedResultEdges
 
@@ -374,12 +381,17 @@ object Main {
   }
 
   /** Loads a Matrix Market (.mtx) file into a GraphX graph. */
-  def loadMtxGraph(sc: SparkContext, path: String): Graph[Byte, Short] = {
+  def loadMtxGraph(sc: SparkContext, path: String, meta: GraphMeta): Graph[Byte, Short] = {  // ← ИЗМЕНЕНО
     val lines = sc.textFile(path).filter(_.trim.nonEmpty).cache()
 
     val header = lines.first().toLowerCase
     val hasWeights = !header.contains("pattern")
     val isSymmetric = header.contains("symmetric")
+
+    // ← ДОБАВЛЕНО: создаём ВСЕ вершины
+    val vertices: RDD[(VertexId, Byte)] = sc.parallelize(
+      (1L to meta.vertices).map(id => (id, 0.toByte))
+    )
 
     val dataLines = lines
       .filter(line => !line.startsWith("%"))
@@ -416,6 +428,6 @@ object Main {
 
     lines.unpersist()
 
-    Graph.fromEdges(edges, 0.toByte)
+    Graph(vertices, edges)  // ← ИЗМЕНЕНО: используем явные вершины
   }
 }

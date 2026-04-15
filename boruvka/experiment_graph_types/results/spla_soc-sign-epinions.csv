@@ -1,0 +1,6 @@
+library,graph,vertices,edges,cores,mst_weight,mst_edges,time_ms
+spla,soc-sign-epinions.mtx,131828,1422420,1,14358349,126012,1644.307000
+spla,soc-sign-epinions.mtx,131828,1422420,1,14358349,126012,2237.328000
+spla,soc-sign-epinions.mtx,131828,1422420,1,14358349,126012,2471.188000
+spla,soc-sign-epinions.mtx,131828,1422420,1,14358349,126012,2533.484000
+spla,soc-sign-epinions.mtx,131828,1422420,1,14358349,126012,2428.014000
