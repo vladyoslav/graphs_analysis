@@ -9,49 +9,54 @@ import scala.collection.mutable
 
 object Boruvka {
 
-  case class MstEdge(src: Long, dst: Long, weight: Double)
+  case class MstEdge(src: Long, dst: Long, weight: Short)
 
-  private case class CandidateEdge(
-    src: Long,
-    dst: Long,
-    weight: Double,
-    srcComp: Long,
-    dstComp: Long
-  )
+  case class BoruvkaResult(edges: List[MstEdge], weight: Double, iterations: Int)
 
-  case class BoruvkaResult(
-    edges: List[MstEdge],
-    weight: Double,
-    iterations: Int
-  )
+  private type EdgeMsg = ((Long, Long, Short), Long) // ((src, dst, weight), otherComp)
+
+  /**
+   * A fully deterministic comparison function for two potential MST edges.
+   * It's used in both aggregateMessages and reduceByKey to ensure that for any
+   * pair of choices, one is always deterministically picked.
+   */
+  private def minEdgeMerge(msg1: EdgeMsg, msg2: EdgeMsg): EdgeMsg = {
+    val (edge1, otherComp1) = msg1
+    val (edge2, otherComp2) = msg2
+    val (src1, dst1, weight1) = edge1
+    val (src2, dst2, weight2) = edge2
+
+    if (weight1 < weight2) {
+      msg1
+    } else if (weight2 < weight1) {
+      msg2
+    } else if (otherComp1 < otherComp2) { // Tie-breaking by destination component ID
+      msg1
+    } else if (otherComp2 < otherComp1) {
+      msg2
+    } else if (dst1 < dst2) { // Tie-breaking by destination vertex ID
+      msg1
+    } else if (dst2 < dst1) {
+      msg2
+    } else if (src1 < src2) { // Final tie-breaking by source vertex ID
+      msg1
+    } else {
+      msg2
+    }
+  }
 
   private class UnionFind {
-    private val parent = mutable.HashMap.empty[Long, Long]
-
-    private def makeSet(x: Long): Unit = {
-      if (!parent.contains(x)) parent(x) = x
-    }
-
+    val parent = mutable.HashMap.empty[Long, Long]
     def find(x: Long): Long = {
-      makeSet(x)
-      if (parent(x) != x) {
-        parent(x) = find(parent(x))
-      }
+      if (!parent.contains(x)) parent(x) = x
+      if (parent(x) != x) parent(x) = find(parent(x))
       parent(x)
     }
 
     def union(x: Long, y: Long): Boolean = {
-      val rx = find(x)
-      val ry = find(y)
-      if (rx == ry) false
-      else {
-        parent(rx) = ry
-        true
-      }
-    }
-
-    def roots(keys: Iterable[Long]): Map[Long, Long] = {
-      keys.map(k => k -> find(k)).toMap
+      val rootX = find(x); val rootY = find(y)
+      if (rootX == rootY) false
+      else { if (rootX < rootY) parent(rootY) = rootX else parent(rootX) = rootY; true }
     }
   }
 
@@ -88,228 +93,187 @@ object Boruvka {
   }
 
   /**
-   * Runs Boruvka's algorithm using GraphX/Spark primitives.
+   * Runs Boruvka's MST algorithm using GraphX.
    */
   def run(
-    graph: Graph[Long, Double],
+    graph: Graph[Byte, Short],
     sc: SparkContext,
     debug: Boolean = false,
     profile: Boolean = false,
-    mem: Boolean = false
+    mem: Boolean = false,
+    sparkOnly: Boolean = false
   ): BoruvkaResult = {
-    var currentGraph = graph.mapVertices((vid, _) => vid)
-    currentGraph.cache()
-    currentGraph.vertices.count()
+
+    var currentGraph: Graph[Long, Short] = graph.mapVertices((vid, _) => vid).cache()
+    currentGraph.vertices.count();
+    currentGraph.edges.count()
     printMem("after initial graph materialization", mem)
 
-    var mstResult = List.empty[MstEdge]
+    val mstBuffer = mutable.ArrayBuffer.empty[MstEdge]
     var continueLoop = true
     var iterations = 0
 
     while (continueLoop) {
       iterations += 1
       val iterStart = System.nanoTime()
+      if (debug) println(s"[Boruvka] iteration $iterations started")
 
-      if (debug) {
-        println(s"[Boruvka] iteration $iterations started")
-      }
-
-      val cheapestPerVertex: VertexRDD[(Long, Long, Double)] =
-        timedStep(profile, s"iter $iterations - aggregateMessages") {
-          currentGraph.aggregateMessages[(Long, Long, Double)](
-            sendMsg = ctx => {
-              if (ctx.srcAttr != ctx.dstAttr) {
-                val edge = (ctx.srcId, ctx.dstId, ctx.attr)
-                ctx.sendToSrc(edge)
-                ctx.sendToDst(edge)
-              }
-            },
-            mergeMsg = (a, b) => if (a._3 <= b._3) a else b
-          ).cache()
-        }
-
-      val hasCheapest = timedStep(profile, s"iter $iterations - check cheapest non-empty") {
-        cheapestPerVertex.take(1).nonEmpty
+      // Step 1: For each vertex, find the cheapest edge to another component.
+      val cheapestPerVertex = timedStep(profile, s"iter $iterations - aggregateMessages") {
+        currentGraph.aggregateMessages[EdgeMsg](
+          ctx => {
+            if (ctx.srcAttr != ctx.dstAttr) {
+              val edge = (ctx.srcId, ctx.dstId, ctx.attr)
+              ctx.sendToSrc((edge, ctx.dstAttr))
+              ctx.sendToDst((edge, ctx.srcAttr))
+            }
+          },
+          minEdgeMerge
+        ).cache()
       }
       printMem(s"iter $iterations - after cheapestPerVertex materialization", mem)
-
-      if (!hasCheapest) {
-        cheapestPerVertex.unpersist()
-
-        if (debug) {
-          val iterTimeMs = (System.nanoTime() - iterStart) / 1e6
-          println(s"[Boruvka] iteration $iterations finished: no crossing edges, stopping (${ "%.2f".format(iterTimeMs) } ms)")
-        }
-
+      
+      if (cheapestPerVertex.isEmpty()) {
+        cheapestPerVertex.unpersist();
+        if (debug) println(s"[Boruvka] iteration $iterations finished: no crossing edges, stopping.")
         continueLoop = false
       } else {
+        // Step 2: For each component, select the single best edge leaving it.
         val cheapestPerComponent = timedStep(profile, s"iter $iterations - cheapestPerComponent") {
           cheapestPerVertex
-            .innerJoin(currentGraph.vertices) {
-              (_, edgeData, compId) => (compId, edgeData)
-            }
-            .map { case (_, (compId, edgeData)) => (compId, edgeData) }
-            .reduceByKey((a, b) => if (a._3 <= b._3) a else b)
+            .innerJoin(currentGraph.vertices) { case (vid, msg, compId) => (compId, msg) }
+            .map { case (_, (compId, msg)) => (compId, msg) }
+            .reduceByKey(minEdgeMerge)
+        }
+
+        // Step 3: From all component choices, select one unique edge for each PAIR of components.
+        val finalEdgesRdd = timedStep(profile, s"iter $iterations - finalEdgeSelection") {
+            cheapestPerComponent.map { case (compA, (edge, compB)) =>
+                val key = if (compA < compB) (compA, compB) else (compB, compA)
+                (key, (edge, compA, compB))
+            }.reduceByKey { case (candidate1, candidate2) =>
+                if (minEdgeMerge((candidate1._1, candidate1._3), (candidate2._1, candidate2._3)) == ((candidate1._1, candidate1._3))) {
+                    candidate1
+                } else {
+                    candidate2
+                }
+            }.values
             .cache()
         }
 
-        val componentMap = timedStep(profile, s"iter $iterations - collect component map") {
-          currentGraph.vertices.collectAsMap()
-        }
-        printMem(s"iter $iterations - after componentMap collect", mem)
-        printEstimatedSize(s"iter $iterations - componentMap", componentMap.asInstanceOf[AnyRef], mem)
-
-        val selectedEdges = timedStep(profile, s"iter $iterations - collect selected edges") {
-          cheapestPerComponent.values.collect().toList
-        }
-        printMem(s"iter $iterations - after selectedEdges collect", mem)
-        printEstimatedSize(s"iter $iterations - selectedEdges", selectedEdges.asInstanceOf[AnyRef], mem)
-
-        val candidateEdgesLocal = timedStep(profile, s"iter $iterations - build candidate edges locally") {
-          selectedEdges
-            .flatMap { case (srcVertex, dstVertex, weight) =>
-              val srcComp = componentMap.get(srcVertex)
-              val dstComp = componentMap.get(dstVertex)
-
-              (srcComp, dstComp) match {
-                case (Some(scid), Some(dcid)) if scid != dcid =>
-                  val (s, d) =
-                    if (srcVertex < dstVertex) (srcVertex, dstVertex)
-                    else (dstVertex, srcVertex)
-
-                  val (c1, c2) =
-                    if (scid < dcid) (scid, dcid)
-                    else (dcid, scid)
-
-                  Some(CandidateEdge(s, d, weight, c1, c2))
-                case _ =>
-                  None
-              }
-            }
-            .distinct
-        }
-        printEstimatedSize(s"iter $iterations - candidateEdgesLocal", candidateEdgesLocal.asInstanceOf[AnyRef], mem)
-
-        if (debug) {
-          println(s"[Boruvka] iteration $iterations: candidate edges = ${candidateEdgesLocal.size}")
-        }
-
-        if (candidateEdgesLocal.isEmpty) {
-          cheapestPerVertex.unpersist()
-          cheapestPerComponent.unpersist()
-
-          if (debug) {
-            val iterTimeMs = (System.nanoTime() - iterStart) / 1e6
-            println(s"[Boruvka] iteration $iterations finished: no candidate edges, stopping (${ "%.2f".format(iterTimeMs) } ms)")
-          }
-
-          continueLoop = false
-        } else {
-          val acceptedCandidates = timedStep(profile, s"iter $iterations - filter accepted edges locally") {
-            val uf = new UnionFind
-            candidateEdgesLocal
-              .sortBy(e => (e.weight, e.src, e.dst))
-              .filter(e => uf.union(e.srcComp, e.dstComp))
-          }
-          printEstimatedSize(s"iter $iterations - acceptedCandidates", acceptedCandidates.asInstanceOf[AnyRef], mem)
-
-          val acceptedEdgesLocal = acceptedCandidates.map(e => MstEdge(e.src, e.dst, e.weight))
-
-          if (debug) {
-            println(s"[Boruvka] iteration $iterations: accepted edges = ${acceptedEdgesLocal.size}")
-          }
-
-          if (acceptedEdgesLocal.isEmpty) {
-            cheapestPerVertex.unpersist()
-            cheapestPerComponent.unpersist()
-
-            if (debug) {
-              val iterTimeMs = (System.nanoTime() - iterStart) / 1e6
-              println(s"[Boruvka] iteration $iterations finished: no accepted edges, stopping (${ "%.2f".format(iterTimeMs) } ms)")
-            }
-
+        if (finalEdgesRdd.isEmpty()) {
+            cheapestPerVertex.unpersist();
+            finalEdgesRdd.unpersist();
+            if (debug) println(s"[Boruvka] iteration $iterations finished: no new edges to add.")
             continueLoop = false
-          } else {
-            mstResult = mstResult ++ acceptedEdgesLocal
-            printEstimatedSize(s"iter $iterations - mstResult", mstResult.asInstanceOf[AnyRef], mem)
-
-            val hasMerges = acceptedCandidates.nonEmpty
-
-            if (!hasMerges) {
-              cheapestPerVertex.unpersist()
-              cheapestPerComponent.unpersist()
-
-              if (debug) {
-                val iterTimeMs = (System.nanoTime() - iterStart) / 1e6
-                println(s"[Boruvka] iteration $iterations finished: no accepted component merges, stopping (${ "%.2f".format(iterTimeMs) } ms)")
-              }
-
-              continueLoop = false
-            } else {
-              val mergedComponentsRdd: RDD[(VertexId, VertexId)] =
-                timedStep(profile, s"iter $iterations - build component remap locally") {
-                  val uf = new UnionFind
-                  acceptedCandidates.foreach(e => uf.union(e.srcComp, e.dstComp))
-
-                  val allComps = acceptedCandidates.flatMap(e => Seq(e.srcComp, e.dstComp)).distinct
-                  val remap = uf.roots(allComps)
-                  sc.parallelize(remap.toSeq)
+        } else {
+          var edgesToAddThisIteration: Array[(Long, Long, Short)] = Array.empty
+          var collectedFinalEdges: Array[((Long, Long, Short), Long, Long)] = Array.empty
+          
+          // Step 4: Calculate component updates. This is the core logic that differs between modes.
+          val compUpdateRdd: RDD[(VertexId, VertexId)] = 
+            if (!sparkOnly) {
+              // --- HYBRID MODE: Use local Union-Find on the driver ---
+              timedStep(profile, "[DRIVER] Total Component Update") {
+                
+                collectedFinalEdges = timedStep(profile, "[DRIVER] Collect Final Edges") {
+                  finalEdgesRdd.collect()
                 }
+                printMem("after [DRIVER] Collect Final Edges", mem)
 
-              val prevGraph = currentGraph
-
-              val vertexToNewComponent: RDD[(VertexId, VertexId)] =
-                timedStep(profile, s"iter $iterations - build vertex relabel map") {
-                  currentGraph.vertices
-                    .map { case (vertexId, oldCompId) => (oldCompId, vertexId) }
-                    .join(mergedComponentsRdd)
-                    .map { case (_, (vertexId, newCompId)) => (vertexId, newCompId) }
-                }
-
-              currentGraph = timedStep(profile, s"iter $iterations - relabel and prune graph") {
-                currentGraph
-                  .outerJoinVertices(vertexToNewComponent) {
-                    case (_, oldCompId, Some(newCompId)) => newCompId
-                    case (_, oldCompId, None)            => oldCompId
+                val componentUpdateMap = timedStep(profile, "[DRIVER] Build UF & Component Map") {
+                  val uf = new UnionFind()
+                  val allInvolvedCompIds = mutable.Set[Long]()
+                  collectedFinalEdges.foreach { case (_, compA, compB) =>
+                    uf.union(compA, compB)
+                    allInvolvedCompIds.add(compA); allInvolvedCompIds.add(compB)
                   }
-                  .subgraph(epred = triplet => triplet.srcAttr != triplet.dstAttr)
-                  .cache()
-              }
-
-              timedStep(profile, s"iter $iterations - materialize updated graph") {
-                currentGraph.vertices.count()
-              }
-              printMem(s"iter $iterations - after updated graph materialization", mem)
-
-              if (debug || profile) {
-                val currentEdges = timedStep(profile, s"iter $iterations - count remaining edges") {
-                  currentGraph.edges.count()
+                  allInvolvedCompIds.map(id => id -> uf.find(id)).toMap
                 }
+                printEstimatedSize(s"iter $iterations - [DRIVER] componentUpdateMap", componentUpdateMap.asInstanceOf[AnyRef], mem)
 
-                val iterTimeMs = (System.nanoTime() - iterStart) / 1e6
-
-                println(
-                  s"[Boruvka] iteration $iterations finished: " +
-                    s"mst_edges_added=${acceptedEdgesLocal.size}, " +
-                    s"mst_edges_total=${mstResult.size}, " +
-                    s"remaining_edges=$currentEdges, " +
-                    s"time_ms=${"%.2f".format(iterTimeMs)}"
-                )
+                timedStep(profile, "[DRIVER] Parallelize Update Map") {
+                    sc.parallelize(componentUpdateMap.toSeq)
+                }
               }
+            } else {
+              // --- SPARK-ONLY MODE: Use connectedComponents on a graph of components ---
+              timedStep(profile, "[SPARK] Total Component Update") {
+                
+                val mergeGraph = timedStep(profile, "[SPARK] Build Component Graph") {
+                    val mergeEdges = finalEdgesRdd.map { case (_, compA, compB) => Edge(compA, compB, ()) }
+                    val mergeVertices = currentGraph.vertices.map(_._2).distinct().map(id => (id, ()))
+                    Graph(mergeVertices, mergeEdges)
+                }
+                printMem("after [SPARK] Build Component Graph", mem)
 
-              cheapestPerVertex.unpersist()
-              cheapestPerComponent.unpersist()
-              prevGraph.unpersist()
+                val updates = timedStep(profile, "[SPARK] Run Connected Components") {
+                    mergeGraph.connectedComponents().vertices
+                }
+                printMem("after [SPARK] Run Connected Components", mem)
+
+                updates
+              }
+            }
+          
+          // In Spark-only mode, we need to collect the edges for the MST buffer *after*
+          // the main component update logic has been timed.
+          if (sparkOnly) {
+            collectedFinalEdges = timedStep(profile, "Collect Edges for MST Buffer") {
+              finalEdgesRdd.collect()
             }
           }
+
+          edgesToAddThisIteration = collectedFinalEdges.map(_._1)
+
+          mstBuffer ++= edgesToAddThisIteration.map { case (src, dst, w) => MstEdge(src, dst, w) }
+          printEstimatedSize(s"iter $iterations - mstResult", mstBuffer.asInstanceOf[AnyRef], mem)
+
+          // Step 5: Create a vertex-to-new-component mapping and apply it to the graph.
+          val vertexToNewComponent = timedStep(profile, s"iter $iterations - [GRAPH] Build Vertex Update RDD") {
+            currentGraph.vertices
+              .map { case (vid, oldCompId) => (oldCompId, vid) }
+              .join(compUpdateRdd)
+              .map { case (_, (vid, newCompId)) => (vid, newCompId) }
+          }
+
+          val prevGraph = currentGraph
+          
+          // Define the new graph by relabeling vertices and pruning internal edges.
+          // These are transformations, so no major computation happens here.
+          currentGraph = timedStep(profile, s"iter $iterations - [GRAPH] Define New Graph (Relabel & Prune)") {
+            currentGraph
+              .outerJoinVertices(vertexToNewComponent)((_, oldCompId, newCompId) => newCompId.getOrElse(oldCompId))
+              .subgraph(epred = e => e.srcAttr != e.dstAttr)
+              .cache()
+          }
+
+          // Trigger an action to materialize the new graph and cache it.
+          // This is where the actual computation for the above steps happens.
+          timedStep(profile, s"iter $iterations - [GRAPH] Materialize New Graph") {
+            currentGraph.vertices.count()
+            currentGraph.edges.count()
+          }
+          printMem(s"iter $iterations - after updated graph materialization", mem)
+          
+          if (debug || profile) {
+            val iterTimeMs = (System.nanoTime() - iterStart) / 1e6
+            println(f"[Boruvka] iteration $iterations finished: mst_edges_added=${edgesToAddThisIteration.length}, mst_edges_total=${mstBuffer.size}, time_ms=${"%.2f".format(iterTimeMs)}")
+          }
+
+          cheapestPerVertex.unpersist();
+          finalEdgesRdd.unpersist();
+          prevGraph.unpersist()
         }
       }
     }
 
+    if (currentGraph != null) currentGraph.unpersist()
+
     BoruvkaResult(
-      edges = mstResult,
-      weight = mstResult.map(_.weight).sum,
-      iterations = iterations
+      edges = mstBuffer.toList,
+      weight = mstBuffer.view.map(_.weight.toDouble).sum,
+      iterations = if (iterations > 0) math.max(1, iterations - 1) else 0
     )
   }
 }

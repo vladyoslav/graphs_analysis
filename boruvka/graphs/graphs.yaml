@@ -1,14 +1,40 @@
+# # Road Networks
+# road-luxembourg-osm: "https://nrvis.com/download/data/road/road-luxembourg-osm.zip"
+# road-usroads-48: "https://nrvis.com/download/data/road/road-usroads-48.zip"
+# road-roadNet-PA: "https://nrvis.com/download/data/road/road-roadNet-PA.zip"
+
+# # Triangulations / Geometric
+# delaunay_n17: "https://nrvis.com/download/data/dimacs10/delaunay_n17.zip"
+# delaunay_n18: "https://nrvis.com/download/data/dimacs10/delaunay_n18.zip"
+# delaunay_n20: "https://nrvis.com/download/data/dimacs10/delaunay_n20.zip"
+
+# # Social / Collaboration
+# soc-LiveMocha: "https://nrvis.com/download/data/soc/soc-LiveMocha.zip"
+# ca-MathSciNet: "https://nrvis.com/download/data/ca/ca-MathSciNet.zip"
+# soc-lastfm: "https://nrvis.com/download/data/soc/soc-lastfm.zip"
+
 # Road Networks
-road-luxembourg-osm: "https://nrvis.com/download/data/road/road-luxembourg-osm.zip"
+road-chesapeake: "https://nrvis.com/download/data/road/road-chesapeake.zip"
+road-minnesota: "https://nrvis.com/download/data/road/road-minnesota.zip"
 road-usroads-48: "https://nrvis.com/download/data/road/road-usroads-48.zip"
 road-roadNet-PA: "https://nrvis.com/download/data/road/road-roadNet-PA.zip"
+road-netherlands-osm: "https://nrvis.com/download/data/road/road-netherlands-osm.zip"
+road-roadNet-CA: "https://nrvis.com/download/data/road/road-roadNet-CA.zip"
+road-italy-osm: "https://nrvis.com/download/data/road/road-italy-osm.zip"
 
-# Triangulations / Geometric
+# Geometric Graphs
+delaunay_n13: "https://nrvis.com/download/data/dimacs10/delaunay_n13.zip"
+delaunay_n15: "https://nrvis.com/download/data/dimacs10/delaunay_n15.zip"
 delaunay_n17: "https://nrvis.com/download/data/dimacs10/delaunay_n17.zip"
-delaunay_n18: "https://nrvis.com/download/data/dimacs10/delaunay_n18.zip"
+delaunay_n19: "https://nrvis.com/download/data/dimacs10/delaunay_n19.zip"
 delaunay_n20: "https://nrvis.com/download/data/dimacs10/delaunay_n20.zip"
+delaunay_n21: "https://nrvis.com/download/data/dimacs10/delaunay_n21.zip"
+rgg_n_2_18_s0: "https://nrvis.com/download/data/dimacs10/rgg_n_2_18_s0.zip"
 
-# Social / Collaboration
-soc-LiveMocha: "https://nrvis.com/download/data/soc/soc-LiveMocha.zip"
-ca-MathSciNet: "https://nrvis.com/download/data/ca/ca-MathSciNet.zip"
-soc-lastfm: "https://nrvis.com/download/data/soc/soc-lastfm.zip"
+# Social & Collaboration Networks
+ca-HepPh: "https://nrvis.com/download/data/ca/ca-HepPh.zip"
+soc-Slashdot0811: "https://nrvis.com/download/data/soc/soc-Slashdot0811.zip"
+ca-dblp-2012: "https://nrvis.com/download/data/ca/ca-dblp-2012.zip"
+soc-youtube-snap: "https://nrvis.com/download/data/soc/soc-youtube-snap.zip"
+soc-pokec: "https://nrvis.com/download/data/soc/soc-pokec.zip"
+soc-livejournal: "https://nrvis.com/download/data/soc/soc-livejournal.zip"

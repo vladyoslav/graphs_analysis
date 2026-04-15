@@ -22,11 +22,12 @@ class BoruvkaTest extends AnyFunSuite with BeforeAndAfterAll {
   }
 
   /** Creates an undirected GraphX graph from a list of (src, dst, weight). */
-  private def makeGraph(edges: List[(Long, Long, Double)]): Graph[Long, Double] = {
+  private def makeGraph(edges: List[(Long, Long, Double)]): Graph[Byte, Short] = {
     val directed = edges.flatMap { case (s, d, w) =>
-      List(Edge(s, d, w), Edge(d, s, w))
+      val wShort = w.toShort
+      List(Edge(s, d, wShort), Edge(d, s, wShort))
     }
-    Graph.fromEdges(sc.parallelize(directed), 0L)
+    Graph.fromEdges(sc.parallelize(directed), 0.toByte)
   }
 
   /** Extracts all unique vertex IDs from MST edges. */

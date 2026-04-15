@@ -10,21 +10,21 @@ object Main {
   case class GraphMeta(vertices: Long, edges: Long)
 
   /** Counts connected components in an undirected graph. */
-  def countConnectedComponents(graph: Graph[Long, Double]): Long = {
+  def countConnectedComponents(graph: Graph[Byte, Short]): Long = {
     graph.connectedComponents().vertices.map(_._2).distinct().count()
   }
 
   /** Builds an undirected GraphX graph from result edges. */
-  def buildMstGraph(sc: SparkContext, edges: List[Boruvka.MstEdge]): Graph[Long, Int] = {
+  def buildMstGraph(sc: SparkContext, edges: List[Boruvka.MstEdge]): Graph[Byte, Short] = {
     val graphEdges = sc.parallelize(
       edges.flatMap { e =>
         List(
-          Edge(e.src, e.dst, 1),
-          Edge(e.dst, e.src, 1)
+        Edge(e.src, e.dst, 1.toShort),
+        Edge(e.dst, e.src, 1.toShort)
         )
       }
     )
-    Graph.fromEdges(graphEdges, 0)
+    Graph.fromEdges(graphEdges, 0.toByte)
   }
 
   /** Counts unique vertices covered by result edges. */
@@ -86,6 +86,8 @@ object Main {
         Some("profile" -> "true")
       } else if (arg == "--mem") {
         Some("mem" -> "true")
+      } else if (arg == "--sparkOnly") {
+        Some("sparkOnly" -> "true")
       } else if (arg.startsWith("--") && arg.contains("=")) {
         val parts = arg.drop(2).split("=", 2)
         Some(parts(0) -> parts(1))
@@ -136,6 +138,7 @@ object Main {
       System.err.println("  --checks   enable final correctness checks (optional flag)")
       System.err.println("  --profile  enable per-step profiling inside Boruvka (optional flag)")
       System.err.println("  --mem      enable memory profiling (optional flag)")
+      System.err.println("  --sparkOnly      enable Spark only implementation")
       System.exit(1)
       ""
     })
@@ -204,6 +207,7 @@ object Main {
     val checks = params.get("checks").contains("true")
     val profile = params.get("profile").contains("true")
     val mem = params.get("mem").contains("true")
+    val sparkOnly = params.get("sparkOnly").contains("true")
 
     val conf = new SparkConf()
       .setAppName("BoruvkaMST")
@@ -217,7 +221,7 @@ object Main {
     sc.setLogLevel("ERROR")
 
     val actualCores = sc.defaultParallelism
-    var graph: Graph[Long, Double] = null
+    var graph: Graph[Byte, Short] = null
 
     try {
       printHeap("before load graph", mem)
@@ -228,7 +232,6 @@ object Main {
 
       graph = timed("load graph") {
         val g = loadMtxGraph(sc, inputPath)
-        g.cache()
         g
       }
 
@@ -240,12 +243,11 @@ object Main {
             countConnectedComponents(graph)
           }
           printHeap("after count input components", mem)
+          forceGc("gc after count input components", mem)
           c
         } else {
           -1L
         }
-
-      forceGc("post input stats", mem)
 
       val expectedResultEdges =
         if (checks) meta.vertices - inputComponents
@@ -272,10 +274,13 @@ object Main {
       println(s"checks:             $checks")
       println(s"profile:            $profile")
       println(s"mem:                $mem")
+      println(s"sparkOnly:          $sparkOnly")
+
+      forceGc("before warmup runs", mem)
 
       for (i <- 0 until numWarmup) {
         val warmup = timed(s"warmup ${i + 1}/$numWarmup") {
-          Boruvka.run(graph, sc, debug, profile, mem)
+          Boruvka.run(graph, sc, debug, profile, mem, sparkOnly)
         }
         println(s"Warmup ${i + 1}/$numWarmup done. weight=${warmup.weight}, edges=${warmup.edges.size}, iterations=${warmup.iterations}")
       }
@@ -289,7 +294,7 @@ object Main {
         printHeap(s"before run ${i + 1}", mem)
 
         val startTime = System.nanoTime()
-        lastResult = Boruvka.run(graph, sc, debug, profile, mem)
+        lastResult = Boruvka.run(graph, sc, debug, profile, mem, sparkOnly)
         val endTime = System.nanoTime()
         val timeMs = (endTime - startTime) / 1e6
 
@@ -311,9 +316,6 @@ object Main {
           val resultGraph = buildMstGraph(sc, lastResult.edges)
           val components = resultGraph.connectedComponents().vertices.map(_._2).distinct().count()
           val covered = countCoveredVertices(lastResult.edges)
-
-          resultGraph.unpersistVertices(blocking = false)
-          resultGraph.edges.unpersist(false)
 
           (components, covered)
         }
@@ -364,9 +366,6 @@ object Main {
       }
 
     } finally {
-      if (graph != null) {
-        graph.unpersist(false)
-      }
       printHeap("before spark stop", mem)
       timed("spark stop") {
         sc.stop()
@@ -375,7 +374,7 @@ object Main {
   }
 
   /** Loads a Matrix Market (.mtx) file into a GraphX graph. */
-  def loadMtxGraph(sc: SparkContext, path: String): Graph[Long, Double] = {
+  def loadMtxGraph(sc: SparkContext, path: String): Graph[Byte, Short] = {
     val lines = sc.textFile(path).filter(_.trim.nonEmpty).cache()
 
     val header = lines.first().toLowerCase
@@ -399,9 +398,9 @@ object Main {
         if (src == dst) {
           Iterator.empty
         } else {
-          val w =
-            if (hasWeights && p.length >= 3) p(2).toDouble
-            else math.min(src, dst).toDouble
+          val w: Short =
+            if (hasWeights && p.length >= 3) p(2).toShort
+            else math.min(src, dst).toShort
 
           if (isSymmetric) {
             val (u, v) =
@@ -415,6 +414,8 @@ object Main {
       }
     }.distinct()
 
-    Graph.fromEdges(edges, 0L)
+    lines.unpersist()
+
+    Graph.fromEdges(edges, 0.toByte)
   }
 }
