@@ -81,33 +81,50 @@ size: 16:9
 
 # Результаты
 
-- **Intel OpenCL и NVIDIA OpenCL:** время на всех пяти графах **близкое** (расхождение порядка **1–3%**).
-- **Относительно SPLA CPU** оба OpenCL-бэкенда **быстрее** примерно **в 1,6–2,8 раза** (минимум на coPapersDBLP и cit-Patents, максимум на citationCiteseer и in-2004).
-- **Относительно Spark** лучший SPLA (OpenCL) **быстрее** примерно **в 3,5–9 раз**; наибольший запас на **amazon0601** и **citationCiteseer**, наименьший на **coPapersDBLP** (~**3,5×**).
+- **Intel OpenCL и NVIDIA OpenCL:** время на всех пяти графах **близкое** (расхождение до **4%**).
+- **Относительно SPLA CPU** оба OpenCL-бэкенда **быстрее** примерно **в 1,5–2,6 раза** (минимум на amazon0601, максимум на cit-Patents).
+- **Относительно Spark** лучший SPLA (OpenCL) **быстрее** примерно **в 3–9 раз**; наибольший запас на **amazon0601** (~**8,6×**), наименьший на **coPapersDBLP** (~**3,1×**).
 
 ---
 
-# Профилирование SPLA (in-2004.mtx, CPU only)
+# Профилирование SPLA (amazon0601.mtx, CPU only)
 
-<style scoped>img { width: 100%; height: 65vh; object-fit:cover; object-position:bottom; }</style>
+<style scoped>img { width: 100%; height: 76vh; object-fit:cover; object-position:bottom; }</style>
 
-![](../graphics/cpu.svg)
+![](../graphics/amazon0601-cpu.svg)
 
 ---
 
-# Профилирование SPLA (in-2004.mtx, Intel OpenCL)
+# Профилирование SPLA (amazon0601.mtx, Intel OpenCL)
 
-<style scoped>img { width: 100%; height: 65vh; object-fit:cover; object-position:bottom; }</style>
+<style scoped>img { width: 100%; height: 76vh; object-fit:cover; object-position:bottom; }</style>
 
-![](../graphics/gpu.svg)
+![](../graphics/amazon0601-intel.svg)
+
+---
+
+# Профилирование SPLA (cit-Patents.mtx, CPU only)
+
+<style scoped>img { width: 100%; height: 84vh; object-fit:cover; object-position:bottom; }</style>
+
+![](../graphics/cit-Patents-cpu.svg)
+
+---
+
+# Профилирование SPLA (cit-Patents.mtx, Intel OpenCL)
+
+<style scoped>img { width: 100%; height: 76vh; object-fit:cover; object-position:bottom; }</style>
+
+![](../graphics/cit-Patents-intel.svg)
 
 ---
 
 # Анализ результатов
 
 - **SpMV (`exec_mxv_masked`)** — по профилю один из самых затратных шагов; **на OpenCL даёт значительное ускорение** относительно SPLA CPU
+- **Ускорение от OpenCL растёт с размером графа** (amazon0601: ~1.5×, cit-Patents: ~2.6×): фиксированные накладные расходы на запуск кернела и синхронизацию незначительны при большой матрице $S$
 - **`exec_m_eadd`** (в т.ч. построение рабочей $S$ из $A$) — **существенная доля** времени; **OpenCL-реализации нет**, выполнение на CPU
-- **Чего не хватало в SPLA**: **пользовательских типов** и полукольца на кортежах $(w,\text{idx})$ без упаковки в `uint32`; примитивов **scatter** (аналог `FastAssign`) и **gather** (`t[i]=f[f[i]]`) **`select`** для фильтрации матрицы по $(i,j,\text{val})$; **маскированного eadd**
+- **Чего не хватало в SPLA**: **пользовательских типов** и полукольца на кортежах $(w,\text{idx})$ без упаковки в `uint32`; примитивов **scatter** (аналог `FastAssign`) и **gather** (`t[i]=f[f[i]]`) **`select`** для фильтрации матрицы
 
 ---
 
