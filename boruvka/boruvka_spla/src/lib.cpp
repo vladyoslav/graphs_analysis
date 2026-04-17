@@ -1,5 +1,6 @@
 #include "lib.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <fstream>
 #include <numeric>
@@ -11,44 +12,6 @@
 
 namespace {
 
-    // DSU for boruvka_mst: representative = min vertex id in the component (not union-by-rank like DsuCompact in boruvka_classic.cpp).
-    struct Dsu {
-        std::vector<spla::uint> parent;
-
-        explicit Dsu(spla::uint n) : parent(n) {
-            std::iota(parent.begin(), parent.end(), spla::uint{0});
-        }
-
-        bool is_representative(spla::uint i) const { return parent[i] == i; }
-
-        spla::uint find(spla::uint x) {
-            spla::uint r = x;
-            while (parent[r] != r) {
-                r = parent[r];
-            }
-            while (parent[x] != x) {
-                const spla::uint p = parent[x];
-                parent[x]          = r;
-                x                  = p;
-            }
-            return r;
-        }
-
-        void unite(spla::uint a, spla::uint b) {
-            a = find(a);
-            b = find(b);
-            if (a == b) {
-                return;
-            }
-            if (a < b) {
-                parent[b] = a;
-            } else {
-                parent[a] = b;
-            }
-        }
-    };
-
-    // Skip empty lines and Matrix Market comments (% ...). Return the first other line.
     std::string read_first_data_line(std::istream& in) {
         std::string line;
         while (std::getline(in, line)) {
@@ -154,113 +117,150 @@ std::vector<MstEdge> boruvka_mst(const spla::ref_ptr<spla::Matrix>& A, spla::For
     const spla::uint     n         = A->get_n_rows();
     const std::uint32_t  enc_shift = edge_encode_shift_for_n(n);
     std::vector<MstEdge> result;
-    if (n <= 1) {
-        return result;
-    }
+    if (n <= 1) return result;
 
-    spla::ref_ptr<spla::Descriptor> desc = spla::Descriptor::make();
-    spla::ref_ptr<spla::Scalar>     inf  = spla::Scalar::make_uint(INF);
+    auto desc = spla::Descriptor::make();
+    auto inf  = spla::Scalar::make_uint(INF);
 
-    // Graph S ⊆ A: only edges whose endpoints lie in different DSU components (rebuilt after merges).
-    // Initialized as element-wise copy of A via e-wise add with FIRST (same weights).
-    spla::ref_ptr<spla::Matrix> S = spla::Matrix::make(n, n, spla::UINT);
+    // S: working matrix with packed (weight, neighbor) edges; rebuilt each iteration
+    // to contain only cross-component edges.
+    auto S = spla::Matrix::make(n, n, spla::UINT);
     S->set_format(working_format);
     (void) S->set_fill_value(inf);
     (void) spla::exec_m_eadd(S, A, A, spla::FIRST_UINT, desc);
 
-    spla::ref_ptr<spla::Matrix> S_new = spla::Matrix::make(n, n, spla::UINT);
+    auto S_new = spla::Matrix::make(n, n, spla::UINT);
     S_new->set_format(working_format);
     (void) S_new->set_fill_value(inf);
 
-    Dsu dsu(n);
+    // edge[i] = min packed (weight, neighbor) for vertex i  (GPU output)
+    auto edge = spla::Vector::make(n, spla::UINT);
+    (void) edge->set_fill_value(inf);
 
-    // Per component root r: best outgoing edge this phase (u -> v, decoded w). Empty if w == INF.
-    std::vector<MstEdge> min_edge(n);
-    for (MstEdge& e : min_edge) {
-        e.w = INF;
-    }
+    // Dense mask for mxv (fill_value makes every position active with ALWAYS select)
+    auto mask = spla::Vector::make(n, spla::UINT);
+    (void) mask->set_fill_value(spla::Scalar::make_uint(1u));
 
-    // Row minima of S after exec_m_reduce_by_row (one packed value per vertex).
-    spla::ref_ptr<spla::Vector> row_min = spla::Vector::make(n, spla::UINT);
-    (void) row_min->set_fill_value(inf);
+    // parent[i] = root of component containing i.
+    // Invariant: after path compression parent[i] == root for all i.
+    // Root = minimum vertex id in the component.
+    std::vector<spla::uint> parent(n);
+    std::iota(parent.begin(), parent.end(), spla::uint{0});
 
     bool S_is_empty = false;
 
     while (!S_is_empty) {
-        // --- Phase 1: for every vertex v, cheapest outgoing edge in S (SPLA row-wise MIN on packed codes). ---
-        for (MstEdge& e : min_edge) {
-            e.w = INF;
-        }
-        (void) row_min->fill_with(inf);
+        // ==== Step 1: Row-wise MIN via mxv (GPU) ====
+        // edge[i] = min_j S(i,j).
+        // Semiring (FIRST, MIN): FIRST ignores the vector value and takes S(i,j);
+        // MIN reduces over the row.  Equivalent to reduce_by_row but has an OpenCL path.
+        (void) edge->fill_with(inf);
+        (void) spla::exec_mxv_masked(
+                edge, mask, S, mask,
+                spla::FIRST_UINT, spla::MIN_UINT, spla::ALWAYS_UINT,
+                inf, desc);
 
-        (void) spla::exec_m_reduce_by_row(row_min, S, spla::MIN_UINT, inf, desc);
+        // ==== Step 2: Aggregate at roots (CPU) ====
+        // Read edge vector (GPU → CPU), decode each entry, keep the best
+        // (weight, dst, src) per component root in cedge[root].
+        // Tiebreaking mirrors the packed encoding: weight-major, then dst, then src.
+        spla::ref_ptr<spla::MemView> edge_keys_view, edge_vals_view;
+        (void) edge->read(edge_keys_view, edge_vals_view);
+        const std::size_t edge_nnz  = edge_vals_view->get_size() / sizeof(std::uint32_t);
+        const auto*       edge_keys = static_cast<const spla::uint*>(edge_keys_view->get_buffer());
+        const auto*       edge_vals = reinterpret_cast<const std::uint32_t*>(edge_vals_view->get_buffer());
 
-        // --- Phase 2: for each component (by root), pick the best edge among rows whose root is that component. ---
-        for (spla::uint v = 0; v < n; ++v) {
-            spla::T_UINT       code = 0;
-            const spla::Status st   = row_min->get_uint(v, code);
-            if (st != spla::Status::Ok || code == INF) {
-                continue;
+        // cedge[root] = best outgoing edge for the component; .u = src, .v = dst (not yet normalised).
+        const MstEdge        NO_EDGE{n, n, INF};
+        std::vector<MstEdge> cedge(n, NO_EDGE);
+        for (std::size_t k = 0; k < edge_nnz; ++k) {
+            if (edge_vals[k] == INF) continue;
+            std::uint32_t w;
+            spla::uint    dst;
+            decode_edge(edge_vals[k], w, dst, enc_shift);
+            const spla::uint src  = edge_keys[k];
+            const spla::uint root = parent[src];
+            if (std::tie(w, dst, src) < std::tie(cedge[root].w, cedge[root].v, cedge[root].u)) {
+                cedge[root] = {src, dst, w};
             }
-            const spla::uint root = dsu.find(v);
-            std::uint32_t    w_dec;
-            spla::uint       dst;
-            decode_edge(code, w_dec, dst, enc_shift);
-            const MstEdge& cur    = min_edge[root];
-            const bool     better = w_dec < cur.w || (w_dec == cur.w && dst < cur.v);
-            if (better) {
-                min_edge[root].u = v;
-                min_edge[root].v = dst;
-                min_edge[root].w = w_dec;
-            }
-        }
-
-        // --- Phase 3: for each component root, add its chosen edge to the MST and merge endpoints in DSU. ---
-        bool added_this_phase = false;
-
-        for (spla::uint i = 0; i < n; ++i) {
-            if (!dsu.is_representative(i)) {
-                continue;
-            }
-            const MstEdge& e = min_edge[i];
-            if (e.w == INF) {
-                continue;
-            }
-            const spla::uint ru = dsu.find(e.u);
-            const spla::uint rv = dsu.find(e.v);
-            if (ru == rv) {
-                continue;
-            }
-            const spla::uint lo = e.u < e.v ? e.u : e.v;
-            const spla::uint hi = e.u < e.v ? e.v : e.u;
-            result.push_back(MstEdge{lo, hi, e.w});
-            added_this_phase = true;
-            dsu.unite(e.u, e.v);
         }
 
-        if (!added_this_phase) break;
+        // ==== Step 3: Select MST edges + update parent (CPU) ====
 
-        // --- Phase 4: drop intra-component edges from S (they cannot be chosen later). Rebuild COO into S_new; swap. ---
-        (void) S_new->clear();
-        spla::ref_ptr<spla::MemView> rows_view;
-        spla::ref_ptr<spla::MemView> cols_view;
-        spla::ref_ptr<spla::MemView> vals_view;
-        S->read(rows_view, cols_view, vals_view);
+        auto find_live_root = [&parent](spla::uint x) -> spla::uint {
+            while (parent[x] != x) x = parent[x];
+            return x;
+        };
+
+        // Iterate roots in ascending order so 2-cycles resolve deterministically:
+        // both roots agree that parent[max] = min; the smaller root adds the edge,
+        // the larger one is already demoted when reached.
+        bool added = false;
+        for (spla::uint r = 0; r < n; ++r) {
+            if (parent[r] != r || cedge[r].w == INF) continue;
+
+            const spla::uint rr = find_live_root(r);
+            const spla::uint dd = find_live_root(cedge[r].v);
+            if (rr == dd) continue;
+
+            const spla::uint mn = std::min(rr, dd);
+            const spla::uint mx = std::max(rr, dd);
+            parent[mx]          = mn;
+
+            const spla::uint lo = std::min(cedge[r].u, cedge[r].v);
+            const spla::uint hi = std::max(cedge[r].u, cedge[r].v);
+            result.push_back(MstEdge{lo, hi, cedge[r].w});
+            added = true;
+        }
+        if (!added) break;
+
+        // ==== Step 4: Path compression (CPU) ====
+        // Flatten the parent forest: parent[i] = root for all i.
+        // Repeated pointer jumping: parent[i] ← parent[parent[i]] until convergence.
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            for (spla::uint i = 0; i < n; ++i) {
+                const spla::uint gp = parent[parent[i]];
+                if (gp != parent[i]) {
+                    parent[i] = gp;
+                    changed   = true;
+                }
+            }
+        }
+
+        // ==== Step 5: Remove intra-component edges — COO filter + Matrix::build ====
+        // After path compression parent[i] is the root directly, so a simple
+        // comparison suffices.  Filtered COO is loaded in one bulk build() call
+        // instead of individual set_uint per edge.
+        spla::ref_ptr<spla::MemView> rows_view, cols_view, vals_view;
+        (void) S->read(rows_view, cols_view, vals_view);
         const std::size_t nnz_s = vals_view->get_size() / sizeof(std::uint32_t);
         const auto*       rows  = static_cast<const spla::uint*>(rows_view->get_buffer());
         const auto*       cols  = static_cast<const spla::uint*>(cols_view->get_buffer());
-        const auto*       vals =
-                reinterpret_cast<const std::uint32_t*>(vals_view->get_buffer());
+        const auto*       vals  = reinterpret_cast<const std::uint32_t*>(vals_view->get_buffer());
 
-        // After swap, S holds cross-component edges only; true iff no set_uint was called on S_new.
-        S_is_empty = true;
+        std::vector<spla::uint>    new_rows, new_cols;
+        std::vector<std::uint32_t> new_vals;
+        new_rows.reserve(nnz_s);
+        new_cols.reserve(nnz_s);
+        new_vals.reserve(nnz_s);
+
         for (std::size_t k = 0; k < nnz_s; ++k) {
-            const spla::uint r = rows[k];
-            const spla::uint c = cols[k];
-            if (dsu.find(r) != dsu.find(c)) {
-                (void) S_new->set_uint(r, c, vals[k]);
-                S_is_empty = false;
+            if (parent[rows[k]] != parent[cols[k]]) {
+                new_rows.push_back(rows[k]);
+                new_cols.push_back(cols[k]);
+                new_vals.push_back(vals[k]);
             }
+        }
+
+        S_is_empty = new_rows.empty();
+        (void) S_new->clear();
+        if (!S_is_empty) {
+            (void) S_new->build(
+                    spla::MemView::make(new_rows.data(), new_rows.size() * sizeof(spla::uint)),
+                    spla::MemView::make(new_cols.data(), new_cols.size() * sizeof(spla::uint)),
+                    spla::MemView::make(new_vals.data(), new_vals.size() * sizeof(std::uint32_t)));
         }
         std::swap(S, S_new);
     }

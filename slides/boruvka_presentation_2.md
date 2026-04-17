@@ -13,29 +13,30 @@ size: 16:9
 
 # Характеристики машины Эксперимент 1
 
-**ОС:** Ubuntu 24.04 LTS
+**ОС:** Ubuntu 24.04.4 LTS
 
-**CPU:** 10th Gen Intel Core i5-10300H @ 2.50 GHz
-- Hyper-Threading включен
+**CPU:** Intel Core i5-10300H @ 2.50 ГГц
+- 4 ядра, 8 потоков (Hyper-Threading)
 - L1: 256 КБ, L2: 1 МБ, L3: 8 МБ
 
-**GPU:** NVIDIA GeForce GTX 1650 Ti Mobile
-- 4 ГБ VRAM GDDR6
-- драйвер 580.126.09
-- CUDA Toolkit 13.0.97
+**GPU:** 
+- NVIDIA GeForce GTX 1650 Ti Mobile (4 ГБ GDDR6); 
+- Intel UHD Graphics (Comet Lake-H GT2), встроенная
 
 **RAM:** 16 ГБ DDR4, 3200 МГц
 
 ---
 
-# Программное обеспечение
+# Программное обеспечение (Эксперимент 1)
 
-- gcc 13.3.0
-- OpenJDK 11.0.30
+- NVIDIA драйвер 580.126.09
+- CUDA Toolkit 13.0
 - SPLA (commit b81d1e2)
 - Apache Spark 3.5.1
+- gcc / g++ 13.3.0
+- OpenJDK 11.0.30
 - OpenCL 3.0
-- Intel OpenCL Runtime 26.05.37020.3
+- Intel: пакет `intel-opencl-icd` 23.43.27642.40-1ubuntu3 (Neo)
 - CMake 3.28.3
 
 ---
@@ -65,7 +66,8 @@ size: 16:9
 
 # Ход экспериментов
 
-- 20 запусков алгоритма на каждом графе и библиотеке
+- 15 запусков алгоритма на каждом графе и библиотеке, 5 прогревов
+- Реализация на Spark запускается c `--cores=8`
 - Вычисление среднего времени и доверительных интервалов
 - Визуализация и анализ результатов
 
@@ -79,33 +81,50 @@ size: 16:9
 
 # Результаты
 
-- SPLA CPU, Intel OpenCL и NVIDIA OpenCL показывают сопоставимое время — OpenCL не даёт заметного ускорения
-- На малых графах SPLA быстрее Spark в 2-5 раз
-- На больших графах разрыв сокращается
+- **Intel OpenCL и NVIDIA OpenCL:** время на всех пяти графах **близкое** (расхождение до **4%**).
+- **Относительно SPLA CPU** оба OpenCL-бэкенда **быстрее** примерно **в 1,5–2,6 раза** (минимум на amazon0601, максимум на cit-Patents).
+- **Относительно Spark** лучший SPLA (OpenCL) **быстрее** примерно **в 3–9 раз**; наибольший запас на **amazon0601** (~**8,6×**), наименьший на **coPapersDBLP** (~**3,1×**).
 
 ---
 
-# Профилирование SPLA
+# Профилирование SPLA (amazon0601.mtx, CPU only)
 
-<style scoped>img { width: 100%; height: 50vh; object-fit:cover; object-position:bottom; }</style>
+<style scoped>img { width: 100%; height: 76vh; object-fit:cover; object-position:bottom; }</style>
 
-![](../graphics/flamegraph_1.svg)
+![](../graphics/amazon0601-cpu.svg)
 
 ---
 
-# Профилирование SPLA
+# Профилирование SPLA (amazon0601.mtx, Intel OpenCL)
 
-<style scoped>img { width: 100%; height: 50vh; object-fit:cover; object-position:bottom; }</style>
+<style scoped>img { width: 100%; height: 76vh; object-fit:cover; object-position:bottom; }</style>
 
-![](../graphics/flamegraph_2.svg)
+![](../graphics/amazon0601-intel.svg)
+
+---
+
+# Профилирование SPLA (cit-Patents.mtx, CPU only)
+
+<style scoped>img { width: 100%; height: 84vh; object-fit:cover; object-position:bottom; }</style>
+
+![](../graphics/cit-Patents-cpu.svg)
+
+---
+
+# Профилирование SPLA (cit-Patents.mtx, Intel OpenCL)
+
+<style scoped>img { width: 100%; height: 76vh; object-fit:cover; object-position:bottom; }</style>
+
+![](../graphics/cit-Patents-intel.svg)
 
 ---
 
 # Анализ результатов
 
-- Использование OpenCL accelerator не дает ускорения, реализация `exec_m_reduce_by_row` на OpenCL отсутствует
-- В SPLA отсутствует поддержка пользовательских типов
-- Операции над матрицами на CPU, нет select, мало операций с масками
+- **SpMV (`exec_mxv_masked`)** — по профилю один из самых затратных шагов; **на OpenCL даёт значительное ускорение** относительно SPLA CPU
+- **Ускорение от OpenCL растёт с размером графа** (amazon0601: ~1.5×, cit-Patents: ~2.6×): фиксированные накладные расходы на запуск кернела и синхронизацию незначительны при большой матрице $S$
+- **`exec_m_eadd`** (в т.ч. построение рабочей $S$ из $A$) — **существенная доля** времени; **OpenCL-реализации нет**, выполнение на CPU
+- **Чего не хватало в SPLA**: **пользовательских типов** и полукольца на кортежах $(w,\text{idx})$ без упаковки в `uint32`; примитивов **scatter** (аналог `FastAssign`) и **gather** (`t[i]=f[f[i]]`) **`select`** для фильтрации матрицы
 
 ---
 
