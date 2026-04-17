@@ -1,0 +1,6 @@
+library,graph,vertices,edges,cores,mst_weight,mst_edges,time_ms
+spark,soc-sign-epinions.mtx,131828,840799,12,1.4308334E7,126012,4926.23
+spark,soc-sign-epinions.mtx,131828,840799,12,1.4308334E7,126012,5219.35
+spark,soc-sign-epinions.mtx,131828,840799,12,1.4308334E7,126012,4921.11
+spark,soc-sign-epinions.mtx,131828,840799,12,1.4308334E7,126012,5514.71
+spark,soc-sign-epinions.mtx,131828,840799,12,1.4308334E7,126012,5616.30

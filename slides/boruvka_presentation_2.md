@@ -130,34 +130,54 @@ size: 16:9
 
 # Характеристики машины Эксперимент 2
 
-**ОС:** Windows 10, 64-разрядная
+**ОС:** Windows 10 Pro (22H2)
 
 **CPU:** 12th Gen Intel Core i5-1235U @ 1.30 GHz
-- 10 ядер (2P + 8E), 12 потоков
+- Ядра: 10 (2 производительных + 8 эффективных)
+- Потоки: 12
+- L3 Кэш: 12 МБ
 
-**GPU:** Intel Iris Xe Graphics (128 MB, интегрированная)
-
-**RAM:** 32 ГБ
+**RAM:** 32 ГБ DDR4, 3200 МГц
 
 ---
 
 # Данные Эксперимент 2
 
-<style scoped>table { margin: 20px 0; font-size: 22px; }</style>
+# Данные эксперимента: Road Networks
 
-| Тип | Граф | Вершины | Рёбра |
-|:-----|:------|--------:|--------:|
-| Road | road-luxembourg-osm | 114 599 | 119 666 |
-| Road | road-usroads-48 | 126 146 | 161 950 |
-| Road | road-roadNet-PA | 1 087 562 | 1 541 514 |
-| Geometric | delaunay_n17 | 131 072 | 393 176 |
-| Geometric | delaunay_n18 | 262 144 | 786 396 |
-| Geometric | delaunay_n20 | 1 048 576 | 3 145 686 |
-| Social | soc-LiveMocha | 104 103 | 2 193 083 |
-| Social | ca-MathSciNet | 332 689 | 820 644 |
-| Social | soc-lastfm | 1 191 805 | 4 519 330 |
+| Граф | Вершины | Рёбра |
+|:------|--------:|--------:|
+| road-usroads | 129 164 | 165 435 |
+| USA-road-d.NY | 264 346 | 730 100 |
+| USA-road-d.COL | 435 666 | 1 042 400 |
+| road-belgium-osm | 1 038 823 | 1 549 970 |
+| road-roadNet-CA | 1 957 027 | 2 760 388 |
 
-Источник: [Network Repository](https://networkrepository.com/)
+---
+
+# Данные эксперимента: Geometric Graphs
+
+| Граф | Вершины | Рёбра |
+|:------|--------:|--------:|
+| delaunay_n17 | 131 072 | 393 176 |
+| delaunay_n18 | 262 144 | 786 396 |
+| delaunay_n19 | 524 288 | 1 572 823 |
+| delaunay_n20 | 1 048 576 | 3 145 686 |
+| delaunay_n21 | 2 097 152 | 6 291 408 |
+
+---
+
+# Данные эксперимента: Social & Collaboration Networks
+
+| Граф | Вершины | Рёбра |
+|:------|--------:|--------:|
+| soc-sign-epinions | 131 828 | 840 799 |
+| ca-citeseer | 227 320 | 814 134 |
+| soc-flickr | 513 969 | 3 190 452 |
+| soc-lastfm | 1 191 805 | 4 519 330 |
+| soc-flickr-und | 2 394 385 | 15 555 042 |
+
+Источник: [Network Repository (NRVIS)](https://networkrepository.com/)
 
 ---
 
@@ -194,7 +214,7 @@ size: 16:9
 
 # Эксперимент 2 — Ускорение SPLA относительно Spark
 
-<style scoped>img { max-height: 70vh; }</style>
+<style scoped>img { max-height: 60vh; }</style>
 
 ![](../boruvka/experiment_graph_types/results/speedup_by_graph_type.png)
 
@@ -208,7 +228,7 @@ size: 16:9
 
 # Эксперимент 2 — Нормализованное время (ms/вершину)
 
-<style scoped>img { max-height: 70vh; }</style>
+<style scoped>img { max-height: 60vh; }</style>
 
 ![](../boruvka/experiment_graph_types/results/time_per_vertex.png)
 

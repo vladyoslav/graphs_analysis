@@ -1,0 +1,6 @@
+library,graph,vertices,edges,cores,mst_weight,mst_edges,time_ms
+spark,ca-citeseer.mtx,227320,814134,12,1.70405691E8,227319,9311.65
+spark,ca-citeseer.mtx,227320,814134,12,1.70405691E8,227319,9210.04
+spark,ca-citeseer.mtx,227320,814134,12,1.70405691E8,227319,9050.63
+spark,ca-citeseer.mtx,227320,814134,12,1.70405691E8,227319,9216.48
+spark,ca-citeseer.mtx,227320,814134,12,1.70405691E8,227319,9222.19

@@ -1,6 +1,0 @@
-library,graph,vertices,edges,cores,mst_weight,mst_edges,time_ms
-spark,ca-MathSciNet.mtx,332689,820644,1,2.41481214E8,332688,13681.76
-spark,ca-MathSciNet.mtx,332689,820644,1,2.41481214E8,332688,13358.52
-spark,ca-MathSciNet.mtx,332689,820644,1,2.41481214E8,332688,12609.72
-spark,ca-MathSciNet.mtx,332689,820644,1,2.41481214E8,332688,12710.58
-spark,ca-MathSciNet.mtx,332689,820644,1,2.41481214E8,332688,12811.05

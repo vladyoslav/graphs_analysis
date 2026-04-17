@@ -1,14 +1,19 @@
-# Road Networks
-road-luxembourg-osm: "https://nrvis.com/download/data/road/road-luxembourg-osm.zip"
-road-usroads-48: "https://nrvis.com/download/data/road/road-usroads-48.zip"
-road-roadNet-PA: "https://nrvis.com/download/data/road/road-roadNet-PA.zip"
+# Road Networks (5 графов)
+road-usroads: "https://nrvis.com/download/data/road/road-usroads.zip"
+# New York City и Colorado -downloaded
+road-belgium-osm: "https://nrvis.com/download/data/road/road-belgium-osm.zip"
+road-roadNet-CA: "https://nrvis.com/download/data/road/road-roadNet-CA.zip"
 
-# Triangulations / Geometric
+# Geometric Graphs (5 графов)
 delaunay_n17: "https://nrvis.com/download/data/dimacs10/delaunay_n17.zip"
 delaunay_n18: "https://nrvis.com/download/data/dimacs10/delaunay_n18.zip"
+delaunay_n19: "https://nrvis.com/download/data/dimacs10/delaunay_n19.zip"
 delaunay_n20: "https://nrvis.com/download/data/dimacs10/delaunay_n20.zip"
+delaunay_n21: "https://nrvis.com/download/data/dimacs10/delaunay_n21.zip"
 
-# Social / Collaboration
-soc-LiveMocha: "https://nrvis.com/download/data/soc/soc-LiveMocha.zip"
-ca-MathSciNet: "https://nrvis.com/download/data/ca/ca-MathSciNet.zip"
+# Social & Collaboration Networks (5 графов)
+soc-sign-epinions: "https://nrvis.com/download/data/soc/soc-sign-epinions.zip"
+ca-citeseer: "https://nrvis.com/download/data/ca/ca-citeseer.zip"
+soc-flickr: "https://nrvis.com/download/data/soc/soc-flickr.zip"
 soc-lastfm: "https://nrvis.com/download/data/soc/soc-lastfm.zip"
+soc-flickr-und: "https://nrvis.com/download/data/soc/soc-flickr-und.zip"
