@@ -146,7 +146,7 @@ currentGraph = currentGraph
 
 # Эксперимент 1
 
-**Цель:** сравнить время работы алгоритма Борувки на SPLA (CPU, NVIDIA OpenCL и Intel OpenCL) и Apache Spark на реальных графах разного размера
+**Цель:** сравнить время работы алгоритма Борувки на SPLA (No Acc, Intel UHD, POCL, NVIDIA) и Apache Spark на реальных графах разного размера
 
 ---
 

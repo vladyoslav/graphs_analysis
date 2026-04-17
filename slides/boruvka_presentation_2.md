@@ -59,7 +59,7 @@ size: 16:9
 
 # Эксперимент 1
 
-**Цель:** сравнить время работы алгоритма Борувки на SPLA (CPU, NVIDIA OpenCL и Intel OpenCL) и Apache Spark на реальных графах разного размера
+**Цель:** сравнить время работы алгоритма Борувки на SPLA (No Acc, Intel UHD, POCL, NVIDIA) и Apache Spark на реальных графах разного размера
 
 ---
 
@@ -81,15 +81,15 @@ size: 16:9
 
 # Результаты
 
-- **Intel OpenCL и NVIDIA OpenCL:** время на всех пяти графах **близкое** (расхождение до **4%**).
-- **Относительно SPLA CPU** оба OpenCL-бэкенда **быстрее** примерно **в 1,5–2,6 раза** (минимум на amazon0601, максимум на cit-Patents).
+- **Intel UHD, NVIDIA и POCL:** время на всех пяти графах **близкое** (расхождение до **~4%**).
+- **Относительно SPLA CPU** все три OpenCL-бэкенда **быстрее** примерно **в 1,6–2,6 раза** (минимум на amazon0601, максимум на cit-Patents).
 - **Относительно Spark** лучший SPLA (OpenCL) **быстрее** примерно **в 3–9 раз**; наибольший запас на **amazon0601** (~**8,6×**), наименьший на **coPapersDBLP** (~**3,1×**).
 
 ---
 
-# Профилирование SPLA (amazon0601.mtx, CPU only)
+# Профилирование SPLA (amazon0601.mtx, No Acc)
 
-<style scoped>img { width: 100%; height: 76vh; object-fit:cover; object-position:bottom; }</style>
+<style scoped>img { width: 100%; height: 70vh; object-fit:cover; object-position:bottom; }</style>
 
 ![](../graphics/amazon0601-cpu.svg)
 
@@ -97,15 +97,15 @@ size: 16:9
 
 # Профилирование SPLA (amazon0601.mtx, Intel OpenCL)
 
-<style scoped>img { width: 100%; height: 76vh; object-fit:cover; object-position:bottom; }</style>
+<style scoped>img { width: 100%; height: 65vh; object-fit:cover; object-position:bottom; }</style>
 
 ![](../graphics/amazon0601-intel.svg)
 
 ---
 
-# Профилирование SPLA (cit-Patents.mtx, CPU only)
+# Профилирование SPLA (cit-Patents.mtx, No Acc)
 
-<style scoped>img { width: 100%; height: 84vh; object-fit:cover; object-position:bottom; }</style>
+<style scoped>img { width: 100%; height: 70vh; object-fit:cover; object-position:bottom; }</style>
 
 ![](../graphics/cit-Patents-cpu.svg)
 
@@ -113,7 +113,7 @@ size: 16:9
 
 # Профилирование SPLA (cit-Patents.mtx, Intel OpenCL)
 
-<style scoped>img { width: 100%; height: 76vh; object-fit:cover; object-position:bottom; }</style>
+<style scoped>img { width: 100%; height: 65vh; object-fit:cover; object-position:bottom; }</style>
 
 ![](../graphics/cit-Patents-intel.svg)
 
