@@ -36,7 +36,8 @@ size: 16:9
 - gcc / g++ 13.3.0
 - OpenJDK 11.0.30
 - OpenCL 3.0
-- Intel: пакет `intel-opencl-icd` 23.43.27642.40-1ubuntu3 (Neo)
+- пакет `intel-opencl-icd` 23.43.27642.40-1ubuntu3 (Neo)
+- пакет `pocl-opencl-icd` 5.0-2.1build3
 - CMake 3.28.3
 
 ---
@@ -95,11 +96,11 @@ size: 16:9
 
 ---
 
-# Профилирование SPLA (amazon0601.mtx, Intel OpenCL)
+# Профилирование SPLA (amazon0601.mtx, POCL)
 
-<style scoped>img { width: 100%; height: 65vh; object-fit:cover; object-position:bottom; }</style>
+<style scoped>img { width: 100%; height: 70vh; object-fit:cover; object-position:bottom; }</style>
 
-![](../graphics/amazon0601-intel.svg)
+![](../graphics/amazon0601-pocl.svg)
 
 ---
 
@@ -111,18 +112,34 @@ size: 16:9
 
 ---
 
-# Профилирование SPLA (cit-Patents.mtx, Intel OpenCL)
+# Профилирование SPLA (cit-Patents.mtx, POCL)
 
-<style scoped>img { width: 100%; height: 65vh; object-fit:cover; object-position:bottom; }</style>
+<style scoped>img { width: 100%; height: 70vh; object-fit:cover; object-position:bottom; }</style>
 
-![](../graphics/cit-Patents-intel.svg)
+![](../graphics/cit-Patents-pocl.svg)
+
+---
+
+# SPLA (amazon0601.mtx, POCL, mxv)
+
+<style scoped>img { width: 100%; height: 75vh; object-fit:cover; object-position:bottom; }</style>
+
+![](../graphics/amazon0601-pocl-mxv.svg)
+
+---
+
+# SPLA (cit-Patents.mtx, POCL, mxv)
+
+<style scoped>img { width: 100%; height: 75vh; object-fit:cover; object-position:bottom; }</style>
+
+![](../graphics/cit-Patents-pocl-mxv.svg)
 
 ---
 
 # Анализ результатов
 
 - **SpMV (`exec_mxv_masked`)** — по профилю один из самых затратных шагов; **на OpenCL даёт значительное ускорение** относительно SPLA CPU
-- **Ускорение от OpenCL растёт с размером графа** (amazon0601: ~1.5×, cit-Patents: ~2.6×): фиксированные накладные расходы на запуск кернела и синхронизацию незначительны при большой матрице $S$
+- **Ускорение от OpenCL растёт с размером графа** (amazon0601: ~1.5×, cit-Patents: ~2.6×): фиксированные накладные расходы на сборку, запуск кернела и синхронизацию незначительны при большой матрице $S$
 - **`exec_m_eadd`** (в т.ч. построение рабочей $S$ из $A$) — **существенная доля** времени; **OpenCL-реализации нет**, выполнение на CPU
 - **Чего не хватало в SPLA**: **пользовательских типов** и полукольца на кортежах $(w,\text{idx})$ без упаковки в `uint32`; примитивов **scatter** (аналог `FastAssign`) и **gather** (`t[i]=f[f[i]]`) **`select`** для фильтрации матрицы
 
