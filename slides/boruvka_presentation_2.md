@@ -156,6 +156,11 @@ size: 16:9
 
 **RAM:** 32 ГБ DDR4, 3200 МГц
 
+**OpenCL:**
+- Platform: Intel(R) OpenCL
+- Device: 12th Gen Intel(R) Core(TM) i5-1235U
+- Driver Version: 2025.20.10.0.23_160000
+
 ---
 
 # Данные Эксперимент 2

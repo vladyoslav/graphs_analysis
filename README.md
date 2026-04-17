@@ -18,12 +18,12 @@ Both pipelines consume undirected graphs in **Matrix Market** (`.mtx`) format an
 ```
 graphs_analysis/
 ├── boruvka/
-│   ├── boruvka_spla/     # SPLA + CMake (OpenCL/CPU)
-│   ├── boruvka_spark/    # Spark GraphX + sbt
-│   └── graphs/           # `.mtx` datasets, download helpers
-├── experiments/
-│   ├── experiment.ipynb  # download SuiteSparse graphs, stats, benchmark orchestration
-│   └── results/          # CSV timing outputs (SPLA / Spark variants)
+│   ├── boruvka_spla/             # SPLA + CMake (OpenCL/CPU)
+│   ├── boruvka_spark/            # Spark GraphX + sbt
+│   ├── graphs/                   # `.mtx` datasets
+│   └── experiment_graph_types/   # Experiment 2
+├── experiments/ 
+│   └── experiment.ipynb  # Experiment 1
 ├── graphics/             # plots, flame graphs
 ├── slides/               # presentation sources and PDFs
 └── .github/workflows/    # CI
