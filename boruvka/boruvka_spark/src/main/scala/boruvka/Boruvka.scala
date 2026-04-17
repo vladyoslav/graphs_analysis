@@ -106,7 +106,6 @@ object Boruvka {
 
     var currentGraph: Graph[Long, Short] = graph.mapVertices((vid, _) => vid).cache()
     currentGraph.vertices.count();
-    currentGraph.edges.count()
     printMem("after initial graph materialization", mem)
 
     val mstBuffer = mutable.ArrayBuffer.empty[MstEdge]
@@ -248,11 +247,14 @@ object Boruvka {
               .cache()
           }
 
+          currentGraph = currentGraph
+            .partitionBy(PartitionStrategy.EdgePartition2D)
+            .cache()
+
           // Trigger an action to materialize the new graph and cache it.
           // This is where the actual computation for the above steps happens.
           timedStep(profile, s"iter $iterations - [GRAPH] Materialize New Graph") {
             currentGraph.vertices.count()
-            currentGraph.edges.count()
           }
           printMem(s"iter $iterations - after updated graph materialization", mem)
           
