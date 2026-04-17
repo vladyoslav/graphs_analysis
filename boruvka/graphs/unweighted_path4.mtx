@@ -1,0 +1,9 @@
+%%MatrixMarket matrix coordinate pattern symmetric
+%
+% Path on 4 vertices; edges listed without weight (implicit w = 1).
+% Expected MST: 3 edges, total weight 3.
+%
+4 4 3
+2 1
+3 2
+4 3
